@@ -2,9 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WorldView – Free & Legal Edition</title>
+
     <!-- CesiumJS -->
     <link
       href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css"
@@ -14,85 +14,300 @@
       src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"
       defer
     ></script>
-    <!-- Satellite.js for TLE propagation -->
+
+    <!-- satellite.js (SGP4) -->
     <script
       src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.1/dist/satellite.min.js"
       defer
     ></script>
-    <!-- TailwindCSS (via CDN) for quick styling) -->
-    <script src="https://cdn.tailwindcss.com" defer></script>
+
+    <!-- Leaflet (2D map mini window) -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      defer
+    ></script>
+
     <style>
-      /* Basic layout – feel free to customise */
+      :root {
+        --bg: #05070b;
+        --panel: rgba(10, 14, 22, 0.78);
+        --panel2: rgba(10, 14, 22, 0.62);
+        --line: rgba(255, 255, 255, 0.10);
+        --txt: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.65);
+        --blue: #2563eb;
+        --green: #2dd4bf;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
         margin: 0;
+        background: var(--bg);
+        color: var(--txt);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
         overflow: hidden;
-        font-family: sans-serif;
       }
-      #app {
+
+      /* Layout */
+      #root {
+        position: fixed;
+        inset: 0;
+      }
+
+      /* Viewport container */
+      #viewportWrap {
         position: absolute;
-        top: 0;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        display: flex;
-        flex-direction: column;
+        inset: 0;
       }
+
+      /* Circular mask */
+      #mask {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #mask::before {
+        content: "";
+        width: min(92vmin, 1000px);
+        height: min(92vmin, 1000px);
+        border-radius: 9999px;
+        box-shadow:
+          0 0 0 9999px rgba(0,0,0,0.74),
+          0 0 50px rgba(0,0,0,0.85) inset,
+          0 0 28px rgba(0,0,0,0.35);
+        outline: 1px solid rgba(255,255,255,0.08);
+      }
+
+      /* Cesium canvas area (full screen under mask) */
       #viewer {
-        flex: 1;
-      }
-      #controls {
         position: absolute;
-        top: 0.5rem;
-        left: 0.5rem;
-        z-index: 10;
-        background: rgba(0, 0, 0, 0.6);
-        color: white;
-        padding: 0.5rem;
-        border-radius: 0.25rem;
-        max-width: 300px;
-        font-size: 0.875rem;
+        inset: 0;
       }
+
+      /* CRT overlay */
+      #crt {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 6;
+        opacity: 0;
+        transition: opacity 180ms ease;
+        background:
+          repeating-linear-gradient(
+            to bottom,
+            rgba(255,255,255,0.05),
+            rgba(255,255,255,0.05) 1px,
+            transparent 1px,
+            transparent 3px
+          );
+        mix-blend-mode: overlay;
+      }
+      #crt.on { opacity: 1; }
+
+      /* HUD panels */
+      .panel {
+        position: absolute;
+        z-index: 20;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        backdrop-filter: blur(10px);
+      }
+      .panel h2 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.88);
+      }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; }
+      .muted { color: var(--muted); font-size: 12px; line-height: 1.35; }
+      .chk { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+      input[type="checkbox"] { transform: scale(1.05); }
+
+      .btn {
+        cursor: pointer;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.9);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-weight: 600;
+      }
+      .btn.primary { background: rgba(37, 99, 235, 0.85); border-color: rgba(37,99,235,0.9); }
+      .btn:active { transform: translateY(1px); }
+
+      .slider {
+        width: 150px;
+      }
+      .pill {
+        font-size: 12px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.85);
+      }
+
+      /* Left panel */
+      #leftPanel { top: 12px; left: 12px; width: 320px; }
+      #brandLine {
+        display:flex; align-items:center; justify-content:space-between; gap: 10px;
+        margin-bottom: 10px;
+      }
+      #title {
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }
+
+      /* Right panel */
+      #rightPanel { top: 12px; right: 12px; width: 320px; }
+      #telemetry {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .kv {
+        background: var(--panel2);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        padding: 8px;
+      }
+      .kv .k { font-size: 11px; color: rgba(255,255,255,0.65); text-transform: uppercase; letter-spacing: 0.08em; }
+      .kv .v { font-size: 13px; font-weight: 700; margin-top: 4px; }
+
+      /* Bottom preset bar */
       #styleBar {
         position: absolute;
-        bottom: 1rem;
         left: 50%;
         transform: translateX(-50%);
+        bottom: 14px;
+        z-index: 25;
         display: flex;
-        gap: 0.5rem;
-        z-index: 10;
+        gap: 8px;
+        padding: 10px;
+        border-radius: 14px;
+        background: rgba(10,14,22,0.55);
+        border: 1px solid rgba(255,255,255,0.10);
+        backdrop-filter: blur(12px);
       }
-      #styleBar button {
-        padding: 0.25rem 0.5rem;
-        border-radius: 0.25rem;
-        background: rgba(0, 0, 0, 0.5);
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.2);
+      .modeBtn {
         cursor: pointer;
+        padding: 7px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.9);
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        font-size: 12px;
       }
-      #styleBar button.active {
-        background: #2563eb;
+      .modeBtn.active { background: rgba(37,99,235,0.90); border-color: rgba(37,99,235,0.95); }
+
+      /* 2D map mini-window */
+      #mapWrap {
+        position: absolute;
+        right: 12px;
+        bottom: 92px;
+        width: 320px;
+        height: 220px;
+        z-index: 22;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(0,0,0,0.4);
+      }
+      #map2d { width: 100%; height: 100%; }
+      #mapLabel {
+        position:absolute;
+        top: 8px;
+        left: 10px;
+        z-index: 1000;
+        font-size: 12px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(0,0,0,0.55);
+        border: 1px solid rgba(255,255,255,0.12);
+      }
+
+      /* Small screens */
+      @media (max-width: 900px) {
+        #rightPanel, #mapWrap { display:none; }
+        #leftPanel { width: min(92vw, 360px); }
       }
     </style>
   </head>
+
   <body>
-    <div id="app">
-      <div id="viewer"></div>
-      <div id="controls">
-        <h1 class="text-lg font-bold mb-2">WorldView – Free Edition</h1>
-        <div class="mb-2">
-          <label><input type="checkbox" id="flightsToggle" checked /> Flights</label><br />
-          <label><input type="checkbox" id="satsToggle" checked /> Satellites</label><br />
-          <label><input type="checkbox" id="quakesToggle" checked /> Earthquakes</label><br />
+    <div id="root">
+      <div id="viewportWrap">
+        <div id="viewer"></div>
+        <div id="mask"></div>
+        <div id="crt"></div>
+      </div>
+
+      <div id="leftPanel" class="panel">
+        <div id="brandLine">
+          <div>
+            <div id="title">WorldView <span class="pill">Free</span></div>
+            <div class="muted">Live layers • Legal/public feeds • Tactical UI</div>
+          </div>
+          <button id="refreshBtn" class="btn primary">Refresh</button>
         </div>
-        <div class="mb-2">
-          <button id="refreshBtn" class="bg-blue-600 text-white px-2 py-1 rounded">Refresh Now</button>
+
+        <h2>Layers</h2>
+        <label class="chk"><input type="checkbox" id="flightsToggle" checked /> Live Flights</label>
+        <label class="chk"><input type="checkbox" id="satsToggle" checked /> Satellites</label>
+        <label class="chk"><input type="checkbox" id="quakesToggle" checked /> Earthquakes</label>
+
+        <div class="row" style="margin-top:10px;">
+          <span class="muted">Density</span>
+          <input id="density" class="slider" type="range" min="10" max="100" value="60" />
         </div>
-        <div class="mb-2 text-sm">
-          <strong>Note:</strong> Data sources are public APIs with rate limits. For best performance, leave only the layers you care about enabled.
+
+        <div class="row">
+          <button id="homeBtn" class="btn">Home</button>
+          <button id="cleanBtn" class="btn">Clean UI</button>
+        </div>
+
+        <div class="muted" style="margin-top:10px;">
+          Note: Flights may default to a demo feed (for reliability). We can enable real OpenSky via a free Cloudflare Worker proxy later.
         </div>
       </div>
+
+      <div id="rightPanel" class="panel">
+        <h2>Post FX</h2>
+        <div class="row"><span class="muted">Bloom</span><input id="bloom" class="slider" type="range" min="0" max="100" value="35" /></div>
+        <div class="row"><span class="muted">Sharpen</span><input id="sharpen" class="slider" type="range" min="0" max="100" value="25" /></div>
+        <div class="row"><span class="muted">Noise</span><input id="noise" class="slider" type="range" min="0" max="100" value="20" /></div>
+
+        <h2 style="margin-top:12px;">Telemetry</h2>
+        <div id="telemetry">
+          <div class="kv"><div class="k">Mode</div><div class="v" id="telMode">Normal</div></div>
+          <div class="kv"><div class="k">FPS</div><div class="v" id="telFps">–</div></div>
+          <div class="kv"><div class="k">Entities</div><div class="v" id="telEnt">–</div></div>
+          <div class="kv"><div class="k">Time</div><div class="v" id="telTime">–</div></div>
+        </div>
+      </div>
+
+      <div id="mapWrap">
+        <div id="mapLabel">2D Map</div>
+        <div id="map2d"></div>
+      </div>
+
       <div id="styleBar"></div>
     </div>
+
     <script src="js/main.js" defer></script>
   </body>
 </html>
