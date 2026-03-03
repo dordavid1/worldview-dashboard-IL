@@ -5,32 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WorldView — Free & Legal Edition</title>
 
-  <!-- Cesium base URL so Workers/Assets load correctly from CDN -->
-  <script>
-    window.CESIUM_BASE_URL = "https://unpkg.com/cesium@1.115.0/Build/Cesium/";
-  </script>
+  <!-- CesiumJS (OFFICIAL CDN - avoid unpkg mismatches) -->
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js" defer></script>
 
-  <!-- CesiumJS -->
-  <link href="https://unpkg.com/cesium@1.115.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
-  <script src="https://unpkg.com/cesium@1.115.0/Build/Cesium/Cesium.js" defer></script>
-
-  <!-- Satellite.js for TLE propagation -->
+  <!-- Satellite.js -->
   <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.1/dist/satellite.min.js" defer></script>
 
-  <!-- MapLibre (2D map) -->
+  <!-- MapLibre -->
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js" defer></script>
 
   <style>
     :root{
       --bg:#070a0f;
-      --panel:#0b1020cc;
-      --panel2:#0b1020a6;
       --stroke:#1c2546;
       --text:#c9d4ff;
       --muted:#7f8bb8;
       --accent:#7de3ff;
-      --good:#5ef0a0;
       --warn:#ffcc66;
       --danger:#ff5f75;
       --shadow:0 12px 40px rgba(0,0,0,.55);
@@ -57,8 +49,11 @@
     #root{position:fixed; inset:0;}
 
     #viewportWrap{
-      position:absolute; inset:0;
-      display:flex; align-items:center; justify-content:center;
+      position:absolute;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
       pointer-events:none;
     }
     #viewport{
@@ -112,8 +107,8 @@
       backdrop-filter: blur(10px);
       z-index:5;
     }
-    #leftPanel{ left:22px; top:22px; width:330px; padding:14px 14px 12px; }
-    #rightPanel{ right:22px; top:120px; width:300px; padding:14px; }
+    #leftPanel{left:22px; top:22px; width:330px; padding:14px 14px 12px;}
+    #rightPanel{right:22px; top:120px; width:300px; padding:14px;}
 
     #topHeader{
       position:absolute;
@@ -255,12 +250,11 @@
       <div class="divider"></div>
 
       <div class="label" style="margin-bottom:8px;">CCTV (optional)</div>
-      <div class="small">Paste a permitted MP4/HLS URL, then set lat/lon. We project it onto the ground as a quad.</div>
+      <div class="small">Paste a permitted MP4/HLS URL, then set lat/lon. We project it onto the ground.</div>
       <div style="margin-top:10px; display:flex; gap:8px;">
         <input id="cctvUrl" placeholder="https://…/camera.mp4" style="flex:1; padding:10px 10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
         <button class="btn" id="cctvProject">PROJECT</button>
       </div>
-
       <div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
         <input id="cctvLat" placeholder="lat" style="padding:10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
         <input id="cctvLon" placeholder="lon" style="padding:10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
@@ -278,6 +272,7 @@
         <div class="label">POST FX</div>
         <button class="btn" id="toggleMap">2D MAP</button>
       </div>
+
       <div class="divider"></div>
 
       <div class="row"><div class="label">Bloom</div><div class="badge" id="bloomVal">0.35</div></div>
@@ -290,17 +285,11 @@
       <input class="slider" id="noise" type="range" min="0" max="1" step="0.01" value="0.25" />
 
       <div class="divider"></div>
-      <div class="label">FLIR Params</div>
-      <div class="small" style="margin-top:6px;">(visual simulation — not real thermal)</div>
 
-      <div class="row" style="margin-top:10px;"><div class="label">Pixelation</div><div class="badge" id="pixVal">0.00</div></div>
-      <input class="slider" id="pixelation" type="range" min="0" max="1" step="0.01" value="0" />
-
-      <div class="row" style="margin-top:10px;"><div class="label">Intensity</div><div class="badge" id="intVal">0.75</div></div>
-      <input class="slider" id="intensity" type="range" min="0" max="1" step="0.01" value="0.75" />
-
-      <div class="row" style="margin-top:10px;"><div class="label">Saturation</div><div class="badge" id="satVal">0.00</div></div>
-      <input class="slider" id="saturation" type="range" min="0" max="1" step="0.01" value="0" />
+      <div class="label">ION TOKEN</div>
+      <div class="small" style="margin-top:6px;">Keep private. Stored in localStorage (not in GitHub).</div>
+      <input id="ionToken" placeholder="paste your Cesium ion token" style="margin-top:8px; width:100%; padding:10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
+      <button class="btn" id="saveIon" style="margin-top:10px; width:100%;">SAVE ION TOKEN</button>
 
       <div class="divider"></div>
       <div class="small">Worker base URL (optional):</div>
@@ -326,7 +315,6 @@
         <button class="btn" id="modePause">PAUSE</button>
       </div>
     </div>
-
   </div>
 
   <script src="js/main.js" defer></script>
