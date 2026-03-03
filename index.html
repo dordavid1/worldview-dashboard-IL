@@ -3,39 +3,377 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WorldView — OSINT Shell</title>
+  <title>WorldView — Free & Legal Edition</title>
 
-  <!-- Cesium STATIC SAFE -->
+  <!-- CesiumJS (Static-safe) -->
   <script>
+    // Must be set BEFORE Cesium loads so Workers/Assets resolve correctly on static hosting
     window.CESIUM_BASE_URL = "https://unpkg.com/cesium@1.115.0/Build/Cesium/";
   </script>
-  <link rel="stylesheet" href="https://unpkg.com/cesium@1.115.0/Build/Cesium/Widgets/widgets.css">
+  <link rel="stylesheet" href="https://unpkg.com/cesium@1.115.0/Build/Cesium/Widgets/widgets.css" />
   <script src="https://unpkg.com/cesium@1.115.0/Build/Cesium/Cesium.js" defer></script>
 
-  <!-- satellite.js -->
+  <!-- Satellite.js for TLE propagation -->
   <script src="https://unpkg.com/satellite.js@5.0.1/dist/satellite.min.js" defer></script>
 
-  <!-- MapLibre -->
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <!-- MapLibre (2D map) -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js" defer></script>
 
   <style>
-    html,body{margin:0;height:100%;background:#070a0f;color:#c9d4ff;overflow:hidden;font-family:system-ui}
-    #viewer{position:fixed;inset:0}
-    #crtOverlay{position:fixed;inset:0;pointer-events:none;opacity:0}
-    #crtOverlay.on{opacity:.5}
+    :root{
+      --bg:#070a0f;
+      --panel:#0b1020cc;
+      --panel2:#0b1020a6;
+      --stroke:#1c2546;
+      --text:#c9d4ff;
+      --muted:#7f8bb8;
+      --accent:#7de3ff;
+      --good:#5ef0a0;
+      --warn:#ffcc66;
+      --danger:#ff5f75;
+      --shadow:0 12px 40px rgba(0,0,0,.55);
+      --radius:16px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    html,body{height:100%;}
+    body{
+      margin:0;
+      background: radial-gradient(1000px 600px at 50% 30%, #111a33 0%, var(--bg) 60%, #04050a 100%);
+      color:var(--text);
+      overflow:hidden;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    }
+
+    /* Top subtle noise */
+    .noise::before{
+      content:"";
+      position:fixed; inset:0;
+      background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.12"/></svg>');
+      mix-blend-mode: overlay;
+      opacity:.25;
+      pointer-events:none;
+      z-index:4;
+    }
+
+    #root{position:fixed; inset:0;}
+
+    /* Circular viewport */
+    #viewportWrap{
+      position:absolute;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      pointer-events:none;
+    }
+
+    #viewport{
+      width:min(86vmin, 980px);
+      height:min(86vmin, 980px);
+      border-radius:999px;
+      overflow:hidden;
+      box-shadow: 0 0 0 1px rgba(125,227,255,.12), 0 0 0 12px rgba(10,12,22,.75), var(--shadow);
+      position:relative;
+      pointer-events:auto;
+      background:#000;
+    }
+
+    #viewer{position:absolute; inset:0;}
+
+    /* CRT overlay (toggleable) */
+    #crtOverlay{
+      position:absolute; inset:0;
+      pointer-events:none;
+      opacity:0;
+      transition:opacity .2s ease;
+      z-index:3;
+    }
+    #crtOverlay.on{opacity:.65;}
     #crtOverlay::before{
       content:"";
-      position:absolute;inset:0;
-      background:repeating-linear-gradient(to bottom,rgba(255,255,255,.05),rgba(255,255,255,.05)2px,transparent 2px,transparent 5px);
-      mix-blend-mode:overlay
+      position:absolute; inset:0;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(255,255,255,0.05),
+        rgba(255,255,255,0.05) 2px,
+        rgba(0,0,0,0) 2px,
+        rgba(0,0,0,0) 5px
+      );
+      mix-blend-mode:overlay;
+      opacity:.9;
+    }
+    #crtOverlay::after{
+      content:"";
+      position:absolute; inset:-20%;
+      background: radial-gradient(circle at 50% 45%, rgba(255,255,255,.06) 0%, rgba(0,0,0,0) 55%),
+                  radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 40%, rgba(0,0,0,.65) 78%);
+      opacity:1;
+      filter: blur(0.2px);
+    }
+
+    /* HUD panels */
+    .panel{
+      position:absolute;
+      background: linear-gradient(180deg, rgba(16,20,40,.88) 0%, rgba(10,14,28,.78) 100%);
+      border:1px solid rgba(125,227,255,.12);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      z-index:5;
+    }
+
+    #leftPanel{
+      left:22px; top:22px;
+      width:330px;
+      padding:14px 14px 12px;
+    }
+
+    #rightPanel{
+      right:22px; top:120px;
+      width:300px;
+      padding:14px;
+    }
+
+    #topHeader{
+      position:absolute;
+      left:22px; right:22px; top:12px;
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      z-index:6;
+      pointer-events:none;
+    }
+
+    .brand{
+      pointer-events:none;
+      display:flex; flex-direction:column; gap:6px;
+      text-transform:uppercase;
+      letter-spacing:.35em;
+      font-weight:700;
+    }
+    .brand .title{font-size:22px; color:#e8ecff;}
+    .brand .subtitle{font-size:11px; color:var(--muted); letter-spacing:.28em;}
+
+    .topMeta{
+      pointer-events:none;
+      font-family:var(--mono);
+      font-size:12px;
+      color:rgba(201,212,255,.8);
+      text-align:right;
+    }
+
+    #bottomBar{
+      position:absolute;
+      left:50%;
+      bottom:18px;
+      transform:translateX(-50%);
+      display:flex;
+      gap:10px;
+      z-index:6;
+    }
+
+    .chip{
+      background: rgba(10,14,28,.75);
+      border:1px solid rgba(125,227,255,.12);
+      border-radius: 14px;
+      padding:10px 12px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .btn{
+      appearance:none;
+      border:1px solid rgba(125,227,255,.16);
+      background: linear-gradient(180deg, rgba(20,26,52,.85) 0%, rgba(10,14,28,.85) 100%);
+      color:var(--text);
+      font-family:var(--mono);
+      font-size:12px;
+      padding:10px 12px;
+      border-radius: 12px;
+      cursor:pointer;
+    }
+    .btn:hover{border-color: rgba(125,227,255,.28)}
+    .btn.active{outline: 1px solid rgba(125,227,255,.45); box-shadow: 0 0 0 3px rgba(125,227,255,.1);}
+
+    .row{display:flex; gap:10px; align-items:center; justify-content:space-between;}
+    .row + .row{margin-top:10px;}
+
+    .label{font-family:var(--mono); font-size:11px; color:rgba(201,212,255,.8); letter-spacing:.08em; text-transform:uppercase;}
+    .small{font-size:11px; color:var(--muted); line-height:1.35;}
+
+    .toggle{display:flex; align-items:center; gap:10px;}
+    .toggle input{width:16px; height:16px; accent-color: var(--accent);}
+
+    .divider{height:1px; background:rgba(125,227,255,.10); margin:12px 0;}
+    .slider{width:100%; accent-color: var(--accent);}
+
+    #miniMapWrap{
+      position:absolute;
+      left:22px;
+      bottom:22px;
+      width:330px;
+      height:220px;
+      z-index:6;
+      border-radius: var(--radius);
+      overflow:hidden;
+      box-shadow: var(--shadow);
+      border:1px solid rgba(125,227,255,.12);
+      background:#070a0f;
+      display:none;
+    }
+    #miniMap{position:absolute; inset:0;}
+
+    .badge{
+      font-family:var(--mono);
+      font-size:10px;
+      padding:3px 8px;
+      border-radius: 999px;
+      border:1px solid rgba(125,227,255,.18);
+      background: rgba(10,14,28,.65);
+      color:rgba(201,212,255,.85);
+    }
+
+    @media (max-width: 980px){
+      #leftPanel{width:300px}
+      #rightPanel{display:none}
+    }
+    @media (max-width: 780px){
+      #leftPanel{display:none}
+      #miniMapWrap{display:none}
     }
   </style>
 </head>
 
-<body>
-  <div id="viewer"></div>
-  <div id="crtOverlay"></div>
+<body class="noise">
+  <div id="root">
+    <div id="topHeader">
+      <div class="brand">
+        <div class="title">WORLDVIEW</div>
+        <div class="subtitle">FREE + LEGAL / OSINT SHELL</div>
+      </div>
+      <div class="topMeta">
+        <div><span class="badge" id="activeStyle">STYLE: NORMAL</span></div>
+        <div style="margin-top:8px; opacity:.8;">REC <span id="recTime">—</span></div>
+      </div>
+    </div>
+
+    <div id="viewportWrap">
+      <div id="viewport">
+        <div id="viewer"></div>
+        <div id="crtOverlay"></div>
+      </div>
+    </div>
+
+    <div id="leftPanel" class="panel">
+      <div class="row">
+        <div class="label">LAYERS</div>
+        <button class="btn" id="refreshBtn">REFRESH</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="layerFlights" checked> <span class="label">Live Flights</span></label>
+      </div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="layerSats" checked> <span class="label">Satellites</span></label>
+      </div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="layerQuakes" checked> <span class="label">Earthquakes</span></label>
+      </div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="layerWeather"> <span class="label">Weather Radar</span></label>
+      </div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="layerTraffic"> <span class="label">Traffic Glow</span></label>
+      </div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="layerCctv"> <span class="label">CCTV Mesh (authorized)</span></label>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="label" style="margin-bottom:8px;">CCTV (optional)</div>
+      <div class="small">Paste a permitted MP4/HLS URL, then set lat/lon. We project it onto the ground as a quad.</div>
+      <div style="margin-top:10px; display:flex; gap:8px;">
+        <input id="cctvUrl" placeholder="https://…/camera.mp4" style="flex:1; padding:10px 10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
+        <button class="btn" id="cctvProject">PROJECT</button>
+      </div>
+
+      <div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <input id="cctvLat" placeholder="lat" style="padding:10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
+        <input id="cctvLon" placeholder="lon" style="padding:10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
+      </div>
+
+      <div class="divider"></div>
+      <div class="label">TELEMETRY</div>
+      <div class="small" style="margin-top:6px;">
+        FPS: <span id="fps">—</span> · Entities: <span id="entityCount">—</span> · Time: <span id="simTime">—</span>
+      </div>
+    </div>
+
+    <div id="rightPanel" class="panel">
+      <div class="row">
+        <div class="label">POST FX</div>
+        <button class="btn" id="toggleMap">2D MAP</button>
+      </div>
+      <div class="divider"></div>
+
+      <div class="row"><div class="label">Bloom</div><div class="badge" id="bloomVal">0.35</div></div>
+      <input class="slider" id="bloom" type="range" min="0" max="1" step="0.01" value="0.35" />
+
+      <div class="row" style="margin-top:10px;"><div class="label">Sharpen</div><div class="badge" id="sharpenVal">0.20</div></div>
+      <input class="slider" id="sharpen" type="range" min="0" max="1" step="0.01" value="0.20" />
+
+      <div class="row" style="margin-top:10px;"><div class="label">Noise</div><div class="badge" id="noiseVal">0.25</div></div>
+      <input class="slider" id="noise" type="range" min="0" max="1" step="0.01" value="0.25" />
+
+      <div class="divider"></div>
+      <div class="label">FLIR Params</div>
+      <div class="small" style="margin-top:6px;">(visual simulation — not real thermal)</div>
+
+      <div class="row" style="margin-top:10px;"><div class="label">Pixelation</div><div class="badge" id="pixVal">0.00</div></div>
+      <input class="slider" id="pixelation" type="range" min="0" max="1" step="0.01" value="0" />
+
+      <div class="row" style="margin-top:10px;"><div class="label">Intensity</div><div class="badge" id="intVal">0.75</div></div>
+      <input class="slider" id="intensity" type="range" min="0" max="1" step="0.01" value="0.75" />
+
+      <div class="row" style="margin-top:10px;"><div class="label">Saturation</div><div class="badge" id="satVal">0.00</div></div>
+      <input class="slider" id="saturation" type="range" min="0" max="1" step="0.01" value="0" />
+
+      <div class="divider"></div>
+      <div class="small">Worker base URL (optional):</div>
+      <input id="workerBase" placeholder="https://your-worker.workers.dev" style="margin-top:8px; width:100%; padding:10px; border-radius:12px; border:1px solid rgba(125,227,255,.14); background:rgba(5,7,14,.6); color:var(--text); font-family:var(--mono); font-size:12px;" />
+      <button class="btn" id="saveWorker" style="margin-top:10px; width:100%;">SAVE</button>
+    </div>
+
+    <div id="miniMapWrap">
+      <div id="miniMap"></div>
+    </div>
+
+    <div id="bottomBar">
+      <div class="chip">
+        <button class="btn" data-style="NORMAL">NORMAL</button>
+        <button class="btn" data-style="CRT">CRT</button>
+        <button class="btn" data-style="NVG">NVG</button>
+        <button class="btn" data-style="FLIR">FLIR</button>
+        <button class="btn" data-style="NOIR">NOIR</button>
+        <button class="btn" data-style="SNOW">SNOW</button>
+        <button class="btn" data-style="ANIME">ANIME</button>
+      </div>
+      <div class="chip" style="gap:12px;">
+        <span class="label">MODE</span>
+        <button class="btn active" id="modeLive">LIVE</button>
+        <button class="btn" id="modePause">PAUSE</button>
+      </div>
+    </div>
+
+  </div>
 
   <script src="js/main.js" defer></script>
 </body>
