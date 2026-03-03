@@ -15,13 +15,13 @@
       defer
     ></script>
 
-    <!-- satellite.js (SGP4) -->
+    <!-- Satellite.js -->
     <script
       src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.1/dist/satellite.min.js"
       defer
     ></script>
 
-    <!-- Leaflet (2D map mini window) -->
+    <!-- Leaflet (2D inset map) -->
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -33,278 +33,367 @@
 
     <style>
       :root {
-        --bg: #05070b;
-        --panel: rgba(10, 14, 22, 0.78);
-        --panel2: rgba(10, 14, 22, 0.62);
-        --line: rgba(255, 255, 255, 0.10);
+        --panel-bg: rgba(12, 16, 22, 0.78);
+        --panel-br: rgba(255, 255, 255, 0.10);
         --txt: rgba(255, 255, 255, 0.92);
         --muted: rgba(255, 255, 255, 0.65);
         --blue: #2563eb;
-        --green: #2dd4bf;
       }
-      * { box-sizing: border-box; }
-      html, body { height: 100%; }
+      html,
       body {
         margin: 0;
-        background: var(--bg);
-        color: var(--txt);
-        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+        padding: 0;
+        height: 100%;
+        background: #000;
         overflow: hidden;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        color: var(--txt);
       }
 
-      /* Layout */
+      /* Main viewport */
       #root {
         position: fixed;
         inset: 0;
       }
-
-      /* Viewport container */
-      #viewportWrap {
-        position: absolute;
-        inset: 0;
-      }
-
-      /* Circular mask */
-      #mask {
-        position: absolute;
-        inset: 0;
-        display: grid;
-        place-items: center;
-        pointer-events: none;
-        z-index: 5;
-      }
-      #mask::before {
-        content: "";
-        width: min(92vmin, 1000px);
-        height: min(92vmin, 1000px);
-        border-radius: 9999px;
-        box-shadow:
-          0 0 0 9999px rgba(0,0,0,0.74),
-          0 0 50px rgba(0,0,0,0.85) inset,
-          0 0 28px rgba(0,0,0,0.35);
-        outline: 1px solid rgba(255,255,255,0.08);
-      }
-
-      /* Cesium canvas area (full screen under mask) */
       #viewer {
         position: absolute;
         inset: 0;
       }
 
-      /* CRT overlay */
-      #crt {
+      /* Circular mask + CRT overlay */
+      #maskWrap {
         position: absolute;
         inset: 0;
         pointer-events: none;
-        z-index: 6;
+      }
+      #circleMask {
+        position: absolute;
+        inset: 0;
+        clip-path: circle(42% at 50% 50%);
+      }
+      #circleRing {
+        position: absolute;
+        inset: 0;
+        clip-path: circle(42% at 50% 50%);
+        outline: 2px solid rgba(255, 255, 255, 0.06);
+        filter: drop-shadow(0 0 14px rgba(0, 0, 0, 0.75));
+      }
+      #crtOverlay {
+        position: absolute;
+        inset: 0;
         opacity: 0;
-        transition: opacity 180ms ease;
-        background:
-          repeating-linear-gradient(
-            to bottom,
-            rgba(255,255,255,0.05),
-            rgba(255,255,255,0.05) 1px,
-            transparent 1px,
-            transparent 3px
-          );
+        background: repeating-linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0.05),
+          rgba(255, 255, 255, 0.05) 1px,
+          transparent 1px,
+          transparent 3px
+        );
         mix-blend-mode: overlay;
       }
-      #crt.on { opacity: 1; }
 
-      /* HUD panels */
+      /* Panels */
       .panel {
         position: absolute;
-        z-index: 20;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 12px;
+        background: var(--panel-bg);
+        border: 1px solid var(--panel-br);
+        border-radius: 14px;
+        padding: 14px;
         backdrop-filter: blur(10px);
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
       }
-      .panel h2 {
-        margin: 0 0 8px 0;
-        font-size: 14px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: rgba(255,255,255,0.88);
+      #leftPanel {
+        top: 18px;
+        left: 18px;
+        width: 340px;
       }
-      .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; }
-      .muted { color: var(--muted); font-size: 12px; line-height: 1.35; }
-      .chk { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-      input[type="checkbox"] { transform: scale(1.05); }
-
-      .btn {
-        cursor: pointer;
-        border: 1px solid rgba(255,255,255,0.12);
-        background: rgba(255,255,255,0.06);
-        color: rgba(255,255,255,0.9);
-        padding: 8px 10px;
-        border-radius: 10px;
-        font-weight: 600;
-      }
-      .btn.primary { background: rgba(37, 99, 235, 0.85); border-color: rgba(37,99,235,0.9); }
-      .btn:active { transform: translateY(1px); }
-
-      .slider {
-        width: 150px;
-      }
-      .pill {
-        font-size: 12px;
-        padding: 3px 8px;
-        border-radius: 999px;
-        border: 1px solid rgba(255,255,255,0.14);
-        background: rgba(255,255,255,0.06);
-        color: rgba(255,255,255,0.85);
+      #rightPanel {
+        top: 18px;
+        right: 18px;
+        width: 330px;
       }
 
-      /* Left panel */
-      #leftPanel { top: 12px; left: 12px; width: 320px; }
-      #brandLine {
-        display:flex; align-items:center; justify-content:space-between; gap: 10px;
+      .titleRow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
         margin-bottom: 10px;
       }
-      #title {
-        font-size: 16px;
-        font-weight: 800;
-        letter-spacing: 0.02em;
+      .brand {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.15;
+      }
+      .brand b {
+        font-size: 18px;
+      }
+      .brand span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.78);
+      }
+      .pill {
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .btn {
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--txt);
+        padding: 8px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .btn.primary {
+        background: var(--blue);
+        border-color: rgba(0, 0, 0, 0.2);
+        color: #fff;
+      }
+      .btn.small {
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-size: 13px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+        margin: 8px 0;
+      }
+      .subTitle {
+        margin-top: 12px;
+        margin-bottom: 6px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: rgba(255, 255, 255, 0.88);
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
       }
 
-      /* Right panel */
-      #rightPanel { top: 12px; right: 12px; width: 320px; }
-      #telemetry {
+      label {
+        font-size: 14px;
+        color: rgba(255, 255, 255, 0.9);
+        user-select: none;
+      }
+      input[type="checkbox"] {
+        transform: translateY(1px);
+      }
+      input[type="range"] {
+        width: 170px;
+      }
+      .grid2 {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 8px;
-        margin-top: 10px;
+        gap: 10px;
+      }
+      .card {
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        background: rgba(0, 0, 0, 0.20);
+        border-radius: 12px;
+        padding: 10px;
       }
       .kv {
-        background: var(--panel2);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 10px;
-        padding: 8px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.78);
       }
-      .kv .k { font-size: 11px; color: rgba(255,255,255,0.65); text-transform: uppercase; letter-spacing: 0.08em; }
-      .kv .v { font-size: 13px; font-weight: 700; margin-top: 4px; }
+      .kv b {
+        color: rgba(255, 255, 255, 0.95);
+        font-weight: 700;
+      }
 
-      /* Bottom preset bar */
+      /* Bottom style bar */
       #styleBar {
         position: absolute;
         left: 50%;
+        bottom: 18px;
         transform: translateX(-50%);
-        bottom: 14px;
-        z-index: 25;
         display: flex;
         gap: 8px;
-        padding: 10px;
-        border-radius: 14px;
-        background: rgba(10,14,22,0.55);
-        border: 1px solid rgba(255,255,255,0.10);
-        backdrop-filter: blur(12px);
+        padding: 10px 12px;
+        border-radius: 16px;
+        background: rgba(12, 16, 22, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        backdrop-filter: blur(10px);
       }
-      .modeBtn {
-        cursor: pointer;
-        padding: 7px 10px;
+      #styleBar button {
+        padding: 7px 12px;
         border-radius: 12px;
-        border: 1px solid rgba(255,255,255,0.14);
-        background: rgba(255,255,255,0.06);
-        color: rgba(255,255,255,0.9);
-        font-weight: 800;
-        letter-spacing: 0.03em;
-        font-size: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.92);
+        cursor: pointer;
+        font-weight: 650;
       }
-      .modeBtn.active { background: rgba(37,99,235,0.90); border-color: rgba(37,99,235,0.95); }
+      #styleBar button.active {
+        background: var(--blue);
+        border-color: rgba(0, 0, 0, 0.25);
+        color: #fff;
+      }
 
-      /* 2D map mini-window */
-      #mapWrap {
+      /* 2D inset map */
+      #map2dWrap {
         position: absolute;
-        right: 12px;
-        bottom: 92px;
+        right: 18px;
+        bottom: 88px;
         width: 320px;
         height: 220px;
-        z-index: 22;
-        border-radius: 14px;
+        border-radius: 16px;
         overflow: hidden;
-        border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(0,0,0,0.4);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
       }
-      #map2d { width: 100%; height: 100%; }
-      #mapLabel {
-        position:absolute;
-        top: 8px;
+      #map2d {
+        width: 100%;
+        height: 100%;
+      }
+      #map2dTag {
+        position: absolute;
         left: 10px;
-        z-index: 1000;
-        font-size: 12px;
-        padding: 4px 8px;
+        top: 10px;
+        z-index: 500;
+        padding: 4px 10px;
         border-radius: 999px;
-        background: rgba(0,0,0,0.55);
-        border: 1px solid rgba(255,255,255,0.12);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(0, 0, 0, 0.35);
+        color: rgba(255, 255, 255, 0.88);
+        font-size: 12px;
       }
 
-      /* Small screens */
-      @media (max-width: 900px) {
-        #rightPanel, #mapWrap { display:none; }
-        #leftPanel { width: min(92vw, 360px); }
+      /* Clean UI toggle */
+      .hiddenUI .panel,
+      .hiddenUI #styleBar,
+      .hiddenUI #map2dWrap,
+      .hiddenUI #circleRing {
+        display: none !important;
       }
     </style>
   </head>
 
   <body>
     <div id="root">
-      <div id="viewportWrap">
-        <div id="viewer"></div>
-        <div id="mask"></div>
-        <div id="crt"></div>
+      <div id="viewer"></div>
+
+      <!-- Mask & CRT -->
+      <div id="maskWrap">
+        <div id="circleMask"></div>
+        <div id="circleRing"></div>
+        <div id="crtOverlay"></div>
       </div>
 
+      <!-- Left panel -->
       <div id="leftPanel" class="panel">
-        <div id="brandLine">
-          <div>
-            <div id="title">WorldView <span class="pill">Free</span></div>
-            <div class="muted">Live layers • Legal/public feeds • Tactical UI</div>
+        <div class="titleRow">
+          <div class="brand">
+            <b>WorldView <span class="pill">Free</span></b>
+            <span>Live layers • Legal/public feeds • Tactical UI</span>
           </div>
-          <button id="refreshBtn" class="btn primary">Refresh</button>
+          <button id="refreshBtn" class="btn primary small">Refresh</button>
         </div>
 
-        <h2>Layers</h2>
-        <label class="chk"><input type="checkbox" id="flightsToggle" checked /> Live Flights</label>
-        <label class="chk"><input type="checkbox" id="satsToggle" checked /> Satellites</label>
-        <label class="chk"><input type="checkbox" id="quakesToggle" checked /> Earthquakes</label>
+        <div class="subTitle">LAYERS</div>
+        <div class="row">
+          <label><input type="checkbox" id="flightsToggle" checked /> Live Flights</label>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="satsToggle" checked /> Satellites</label>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="quakesToggle" checked /> Earthquakes</label>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="trafficToggle" /> Traffic Glow</label>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="cctvToggle" /> CCTV Mesh (authorized)</label>
+        </div>
 
-        <div class="row" style="margin-top:10px;">
-          <span class="muted">Density</span>
-          <input id="density" class="slider" type="range" min="10" max="100" value="60" />
+        <div class="row" style="margin-top: 10px">
+          <label class="muted">Density</label>
+          <input type="range" id="density" min="0" max="100" value="55" />
         </div>
 
         <div class="row">
-          <button id="homeBtn" class="btn">Home</button>
-          <button id="cleanBtn" class="btn">Clean UI</button>
+          <button id="homeBtn" class="btn small">Home</button>
+          <button id="cleanBtn" class="btn small">Clean UI</button>
         </div>
 
-        <div class="muted" style="margin-top:10px;">
-          Note: Flights may default to a demo feed (for reliability). We can enable real OpenSky via a free Cloudflare Worker proxy later.
+        <div class="muted" style="margin-top: 10px">
+          Note: Flights use OpenSky via a free Cloudflare Worker proxy (for CORS). Replay stores snapshots locally (IndexedDB) up to 24h.
         </div>
       </div>
 
+      <!-- Right panel -->
       <div id="rightPanel" class="panel">
-        <h2>Post FX</h2>
-        <div class="row"><span class="muted">Bloom</span><input id="bloom" class="slider" type="range" min="0" max="100" value="35" /></div>
-        <div class="row"><span class="muted">Sharpen</span><input id="sharpen" class="slider" type="range" min="0" max="100" value="25" /></div>
-        <div class="row"><span class="muted">Noise</span><input id="noise" class="slider" type="range" min="0" max="100" value="20" /></div>
+        <div class="subTitle">POST FX</div>
+        <div class="row">
+          <label class="muted">Bloom</label>
+          <input type="range" id="fxBloom" min="0" max="100" value="30" />
+        </div>
+        <div class="row">
+          <label class="muted">Sharpen</label>
+          <input type="range" id="fxSharpen" min="0" max="100" value="10" />
+        </div>
+        <div class="row">
+          <label class="muted">Noise</label>
+          <input type="range" id="fxNoise" min="0" max="100" value="20" />
+        </div>
 
-        <h2 style="margin-top:12px;">Telemetry</h2>
-        <div id="telemetry">
-          <div class="kv"><div class="k">Mode</div><div class="v" id="telMode">Normal</div></div>
-          <div class="kv"><div class="k">FPS</div><div class="v" id="telFps">–</div></div>
-          <div class="kv"><div class="k">Entities</div><div class="v" id="telEnt">–</div></div>
-          <div class="kv"><div class="k">Time</div><div class="v" id="telTime">–</div></div>
+        <div class="subTitle">REPLAY</div>
+        <div class="row">
+          <button id="liveBtn" class="btn small primary">LIVE</button>
+          <button id="playBtn" class="btn small">Play</button>
+          <button id="pauseBtn" class="btn small">Pause</button>
+        </div>
+        <div class="row">
+          <label class="muted">24h</label>
+          <input type="range" id="replaySlider" min="0" max="1440" value="0" />
+        </div>
+        <div class="muted" id="replayLabel">Mode: LIVE</div>
+
+        <div class="subTitle">TELEMETRY</div>
+        <div class="grid2">
+          <div class="card"><div class="kv"><span>MODE</span><b id="telMode">Normal</b></div></div>
+          <div class="card"><div class="kv"><span>FPS</span><b id="telFps">—</b></div></div>
+          <div class="card"><div class="kv"><span>ENTITIES</span><b id="telEntities">—</b></div></div>
+          <div class="card"><div class="kv"><span>TIME</span><b id="telTime">—</b></div></div>
+        </div>
+
+        <div class="subTitle">CCTV (optional)</div>
+        <div class="muted">
+          Add a *permitted* video URL (mp4 or HLS if browser supports), then set lat/lon & size. This projects the video onto the ground.
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <input id="cctvUrl" placeholder="https://.../camera.mp4" style="flex:1;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);color:var(--txt);border-radius:10px;padding:8px" />
+        </div>
+        <div class="row">
+          <input id="cctvLat" placeholder="lat" style="width:90px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);color:var(--txt);border-radius:10px;padding:8px" />
+          <input id="cctvLon" placeholder="lon" style="width:90px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);color:var(--txt);border-radius:10px;padding:8px" />
+          <button id="cctvAddBtn" class="btn small">Project</button>
         </div>
       </div>
 
-      <div id="mapWrap">
-        <div id="mapLabel">2D Map</div>
+      <!-- 2D map inset -->
+      <div id="map2dWrap">
+        <div id="map2dTag">2D Map</div>
         <div id="map2d"></div>
       </div>
 
+      <!-- Style bar -->
       <div id="styleBar"></div>
     </div>
 
