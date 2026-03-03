@@ -1,9 +1,10 @@
 /*
-  WorldView V2 — Free & Legal Edition
+  WorldView — Stable Edition (NO custom fragment shaders)
 
-  FIX:
-  - No shader header redeclare (czm_viewport/out_FragColor/etc).
-  - Start Viewer with OSM imageryProvider to avoid any Ion calls.
+  Fix:
+  - Remove all custom PostProcess shaders that crash WebGL on some devices/browsers.
+  - Keep Cesium built-in Bloom only + CRT overlay via CSS.
+  - Force free globe: OSM imagery + Ellipsoid terrain (no Cesium ion token needed).
 */
 
 (function () {
@@ -27,6 +28,7 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
 
+  // --- Networking ---
   function apiUrl(path, params) {
     const base = (state.workerBase || '').replace(/\/$/, '');
     const url = new URL((base ? base : '') + path, window.location.origin);
@@ -48,6 +50,7 @@
     return await r.json();
   }
 
+  // --- Cesium data sources ---
   const layers = { flights: null, sats: null, quakes: null, traffic: null, cctv: null };
   const entityRegistry = {
     count() {
@@ -66,20 +69,31 @@
       const json = await safeJson(apiUrl('/api/flights', { extended: 1 }));
       const statesArr = json.states || [];
       layers.flights.entities.removeAll();
+
       for (const st of statesArr.slice(0, 900)) {
         const [icao24, callsign, originCountry, , , lon, lat, baroAlt, , velocity, heading, , , geoAlt] = st;
         if (lat == null || lon == null) continue;
+
         const altM = (geoAlt != null ? geoAlt : (baroAlt != null ? baroAlt : 0));
         const labelText = (callsign || icao24 || '').trim();
+
         layers.flights.entities.add({
           position: Cesium.Cartesian3.fromDegrees(lon, lat, altM),
           point: { pixelSize: 4, color: Cesium.Color.fromCssColorString('#ffd166'), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
-          label: { text: labelText, font: '10px sans-serif', fillColor: Cesium.Color.WHITE, pixelOffset: new Cesium.Cartesian2(0, -12), showBackground: false,
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 1.4e6) },
+          label: {
+            text: labelText,
+            font: '10px sans-serif',
+            fillColor: Cesium.Color.WHITE,
+            pixelOffset: new Cesium.Cartesian2(0, -12),
+            showBackground: false,
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 1.4e6),
+          },
           properties: { type: 'flight', icao24, callsign: labelText, originCountry, velocity, heading },
         });
       }
-    } catch (e) { console.warn('Flights fetch failed', e); }
+    } catch (e) {
+      console.warn('Flights fetch failed (set Worker base URL for OpenSky).', e);
+    }
   }
 
   async function updateQuakes() {
@@ -87,21 +101,35 @@
     try {
       const json = await safeJson(apiUrl('/api/earthquakes'));
       layers.quakes.entities.removeAll();
+
       for (const f of (json.features || [])) {
         const coords = f.geometry?.coordinates;
         if (!coords || coords.length < 3) continue;
         const [lon, lat, depthKm] = coords;
         const mag = f.properties?.mag ?? 1.0;
+
         layers.quakes.entities.add({
           position: Cesium.Cartesian3.fromDegrees(lon, lat, -Math.abs(depthKm) * 1000),
-          point: { pixelSize: Math.min(22, 4 + mag * 3.1), color: Cesium.Color.fromCssColorString('#ff5f75').withAlpha(0.65),
-            outlineColor: Cesium.Color.fromCssColorString('#ffd166').withAlpha(0.9), outlineWidth: 1 },
-          label: { text: mag.toFixed(1), font: '10px sans-serif', fillColor: Cesium.Color.WHITE, pixelOffset: new Cesium.Cartesian2(0, -12), showBackground: false,
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 5.0e6) },
+          point: {
+            pixelSize: Math.min(22, 4 + mag * 3.1),
+            color: Cesium.Color.fromCssColorString('#ff5f75').withAlpha(0.65),
+            outlineColor: Cesium.Color.fromCssColorString('#ffd166').withAlpha(0.9),
+            outlineWidth: 1,
+          },
+          label: {
+            text: mag.toFixed(1),
+            font: '10px sans-serif',
+            fillColor: Cesium.Color.WHITE,
+            pixelOffset: new Cesium.Cartesian2(0, -12),
+            showBackground: false,
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 5.0e6),
+          },
           properties: { type: 'quake', mag, depthKm },
         });
       }
-    } catch (e) { console.warn('Earthquakes fetch failed', e); }
+    } catch (e) {
+      console.warn('Earthquakes fetch failed', e);
+    }
   }
 
   async function updateSats() {
@@ -115,6 +143,7 @@
         const line1 = sat.line1 || sat.TLE_LINE1;
         const line2 = sat.line2 || sat.TLE_LINE2;
         if (!line1 || !line2) continue;
+
         try {
           const rec = satellite.twoline2satrec(line1, line2);
           const pv = satellite.propagate(rec, now);
@@ -124,6 +153,7 @@
           const lon = satellite.degreesLong(gd.longitude);
           const lat = satellite.degreesLat(gd.latitude);
           const alt = gd.height * 1000;
+
           layers.sats.entities.add({
             position: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
             point: { pixelSize: 3, color: Cesium.Color.fromCssColorString('#7de3ff'), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
@@ -131,9 +161,12 @@
           });
         } catch {}
       }
-    } catch (e) { console.warn('Satellites fetch failed', e); }
+    } catch (e) {
+      console.warn('Satellites fetch failed', e);
+    }
   }
 
+  // Weather radar via RainViewer tiles
   let weatherLayer;
   async function setWeatherEnabled(enabled) {
     if (!enabled) {
@@ -148,9 +181,12 @@
       const template = `https://tilecache.rainviewer.com${last.path}/256/{z}/{x}/{y}/2/1_1.png`;
       weatherLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: template, credit: 'RainViewer' }));
       weatherLayer.alpha = 0.55;
-    } catch (e) { console.warn('Weather radar failed', e); }
+    } catch (e) {
+      console.warn('Weather radar failed', e);
+    }
   }
 
+  // Traffic Glow (simulated)
   let trafficTimer;
   function setTrafficEnabled(enabled) {
     if (!enabled) {
@@ -159,11 +195,13 @@
       layers.traffic.entities.removeAll();
       return;
     }
+
     const seedPoints = () => {
       layers.traffic.entities.removeAll();
       const carto = viewer.camera.positionCartographic;
       const centerLon = Cesium.Math.toDegrees(carto.longitude);
       const centerLat = Cesium.Math.toDegrees(carto.latitude);
+
       for (let i = 0; i < 600; i++) {
         const lon = centerLon + (Math.random() - 0.5) * 0.28;
         const lat = centerLat + (Math.random() - 0.5) * 0.22;
@@ -174,6 +212,7 @@
         });
       }
     };
+
     seedPoints();
     trafficTimer = setInterval(seedPoints, 8000);
   }
@@ -189,6 +228,7 @@
     if (!url || Number.isNaN(lat) || Number.isNaN(lon)) { alert('CCTV: please provide URL + lat/lon'); return; }
 
     clearCctv();
+
     const halfSizeDeg = 0.0012;
     const rect = Cesium.Rectangle.fromDegrees(lon - halfSizeDeg, lat - halfSizeDeg, lon + halfSizeDeg, lat + halfSizeDeg);
 
@@ -201,217 +241,35 @@
     video.autoplay = true;
     try { await video.play(); } catch {}
 
-    cctvEntity = layers.cctv.entities.add({ rectangle: { coordinates: rect, material: video, height: 0 }, properties: { type: 'cctv', url } });
+    cctvEntity = layers.cctv.entities.add({
+      rectangle: { coordinates: rect, material: video, height: 0 },
+      properties: { type: 'cctv', url },
+    });
 
-    viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat, 900), orientation: { heading: 0.0, pitch: Cesium.Math.toRadians(-45), roll: 0 }, duration: 1.4 });
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(lon, lat, 900),
+      orientation: { heading: 0.0, pitch: Cesium.Math.toRadians(-45), roll: 0 },
+      duration: 1.4,
+    });
   }
 
-  // --- Post FX (NO redeclare!) ---
-  let stages = { bloom: null, sharpen: null, noise: null, style: null, pixel: null };
+  // --- Post FX (SAFE): Bloom only ---
+  let bloomStage = null;
 
-  function resetPostFx() { viewer.scene.postProcessStages.removeAll(); stages = { bloom: null, sharpen: null, noise: null, style: null, pixel: null }; }
-
-  function addBloom(v) {
-    const s = Cesium.PostProcessStageLibrary.createBloomStage();
-    s.enabled = v > 0;
-    viewer.scene.postProcessStages.add(s);
-    stages.bloom = s;
-    applyBloom(v);
-  }
   function applyBloom(v) {
-    if (!stages.bloom) return;
-    stages.bloom.enabled = v > 0.01;
-    stages.bloom.uniforms.brightness = Cesium.Math.lerp(-0.35, 0.15, v);
-    stages.bloom.uniforms.sigma = Cesium.Math.lerp(1.2, 3.6, v);
+    if (!bloomStage) return;
+    bloomStage.enabled = v > 0.01;
+    bloomStage.uniforms.brightness = Cesium.Math.lerp(-0.35, 0.15, v);
+    bloomStage.uniforms.sigma = Cesium.Math.lerp(1.2, 3.6, v);
   }
 
-  function addSharpen(v) {
-    const st = new Cesium.PostProcessStage({
-      fragmentShader: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform vec4 czm_viewport;
-uniform float amount;
-void main(){
-  vec2 uv = v_textureCoordinates;
-  vec2 px = 1.0 / czm_viewport.zw;
-  vec4 c = texture(colorTexture, uv);
-  vec4 n = texture(colorTexture, uv + vec2(0.0, px.y));
-  vec4 s = texture(colorTexture, uv - vec2(0.0, px.y));
-  vec4 e = texture(colorTexture, uv + vec2(px.x, 0.0));
-  vec4 w = texture(colorTexture, uv - vec2(px.x, 0.0));
-  vec4 edge = (n + s + e + w - 4.0*c);
-  out_FragColor = c - edge * amount;
-}`,
-      uniforms: { amount: v },
-    });
-    viewer.scene.postProcessStages.add(st);
-    stages.sharpen = st;
-    applySharpen(v);
-  }
-  function applySharpen(v) {
-    if (!stages.sharpen) return;
-    stages.sharpen.uniforms.amount = v * 0.75;
-    stages.sharpen.enabled = v > 0.01;
-  }
+  function rebuildPostFx() {
+    const pps = viewer.scene.postProcessStages;
+    pps.removeAll();
 
-  function addNoise(v) {
-    const st = new Cesium.PostProcessStage({
-      fragmentShader: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform float amount;
-float rand(vec2 co){ return fract(sin(dot(co.xy, vec2(12.9898,78.233))) * 43758.5453); }
-void main(){
-  vec4 c = texture(colorTexture, v_textureCoordinates);
-  float r = rand(v_textureCoordinates * 1000.0);
-  c.rgb += (r-0.5)*amount;
-  out_FragColor = c;
-}`,
-      uniforms: { amount: v },
-    });
-    viewer.scene.postProcessStages.add(st);
-    stages.noise = st;
-    applyNoise(v);
-  }
-  function applyNoise(v) {
-    if (!stages.noise) return;
-    stages.noise.uniforms.amount = v * 0.08;
-    stages.noise.enabled = v > 0.01;
-  }
-
-  function addPixelation(v) {
-    const st = new Cesium.PostProcessStage({
-      fragmentShader: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform float amount;
-void main(){
-  vec2 uv = v_textureCoordinates;
-  float px = mix(1.0, 200.0, amount);
-  vec2 q = floor(uv * px) / px;
-  out_FragColor = texture(colorTexture, q);
-}`,
-      uniforms: { amount: v },
-    });
-    viewer.scene.postProcessStages.add(st);
-    stages.pixel = st;
-    applyPixelation(v);
-  }
-  function applyPixelation(v) {
-    if (!stages.pixel) return;
-    stages.pixel.uniforms.amount = v;
-    stages.pixel.enabled = v > 0.01;
-  }
-
-  function addStyleStage(style) {
-    const shaders = {
-      NORMAL: null,
-      CRT: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform float intensity;
-uniform float saturation;
-void main(){
-  vec2 uv = v_textureCoordinates;
-  vec4 c = texture(colorTexture, uv);
-  float shift = 0.0012 * intensity;
-  float r = texture(colorTexture, uv + vec2(shift,0.0)).r;
-  float b = texture(colorTexture, uv - vec2(shift,0.0)).b;
-  c.rgb = vec3(r, c.g, b);
-  vec2 p = uv - 0.5;
-  float v = smoothstep(0.65, 0.10, dot(p,p));
-  c.rgb *= mix(0.65, 1.0, v);
-  float g = (c.r + c.g + c.b)/3.0;
-  c.rgb = mix(vec3(g), c.rgb, 1.0 + saturation);
-  out_FragColor = c;
-}`,
-      NVG: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform float intensity;
-void main(){
-  vec4 c = texture(colorTexture, v_textureCoordinates);
-  float g = dot(c.rgb, vec3(0.299,0.587,0.114));
-  g = pow(g, 0.85);
-  vec3 nvg = vec3(0.06, 1.0, 0.12) * g;
-  nvg *= (1.0 + intensity*0.35);
-  out_FragColor = vec4(nvg, c.a);
-}`,
-      FLIR: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform float intensity;
-uniform float saturation;
-vec3 ramp(float t){
-  t = clamp(t, 0.0, 1.0);
-  vec3 a = vec3(0.05,0.05,0.08);
-  vec3 b = vec3(0.1,0.2,0.6);
-  vec3 c = vec3(0.9,0.65,0.05);
-  vec3 d = vec3(1.0,1.0,1.0);
-  if(t < 0.35) return mix(a,b,t/0.35);
-  if(t < 0.75) return mix(b,c,(t-0.35)/0.40);
-  return mix(c,d,(t-0.75)/0.25);
-}
-void main(){
-  vec4 c0 = texture(colorTexture, v_textureCoordinates);
-  float l = dot(c0.rgb, vec3(0.299,0.587,0.114));
-  l = smoothstep(0.05, 0.95, l);
-  l = mix(l, pow(l, 0.55), intensity);
-  vec3 col = ramp(l);
-  float g = (col.r + col.g + col.b)/3.0;
-  col = mix(vec3(g), col, 1.0 + saturation);
-  out_FragColor = vec4(col, c0.a);
-}`,
-      NOIR: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-void main(){
-  vec4 c = texture(colorTexture, v_textureCoordinates);
-  float g = dot(c.rgb, vec3(0.299,0.587,0.114));
-  g = smoothstep(0.05, 0.95, g);
-  out_FragColor = vec4(vec3(g), c.a);
-}`,
-      SNOW: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform float intensity;
-float rand(vec2 co){ return fract(sin(dot(co.xy, vec2(12.9898,78.233))) * 43758.5453); }
-void main(){
-  vec4 c = texture(colorTexture, v_textureCoordinates);
-  float g = dot(c.rgb, vec3(0.299,0.587,0.114));
-  c.rgb = mix(c.rgb, vec3(g)*vec3(0.85,0.95,1.0), 0.65);
-  float r = rand(v_textureCoordinates*vec2(1200.0,800.0));
-  c.rgb += (r-0.5)*0.06*intensity;
-  out_FragColor = c;
-}`,
-      ANIME: `
-uniform sampler2D colorTexture;
-in vec2 v_textureCoordinates;
-out vec4 out_FragColor;
-uniform float intensity;
-void main(){
-  vec4 c = texture(colorTexture, v_textureCoordinates);
-  float levels = mix(10.0, 4.0, intensity);
-  c.rgb = floor(c.rgb * levels)/levels;
-  out_FragColor = c;
-}`,
-    };
-
-    const src = shaders[style];
-    if (!src) { stages.style = null; return; }
-
-    const st = new Cesium.PostProcessStage({ fragmentShader: src, uniforms: { intensity: state.fx.intensity, saturation: state.fx.saturation } });
-    viewer.scene.postProcessStages.add(st);
-    stages.style = st;
+    bloomStage = Cesium.PostProcessStageLibrary.createBloomStage();
+    pps.add(bloomStage);
+    applyBloom(state.fx.bloom);
   }
 
   function applyStyle(style) {
@@ -419,12 +277,8 @@ void main(){
     $('activeStyle').textContent = `STYLE: ${style}`;
     $('crtOverlay').classList.toggle('on', style === 'CRT');
 
-    resetPostFx();
-    addBloom(state.fx.bloom);
-    addSharpen(state.fx.sharpen);
-    addPixelation(state.fx.pixelation);
-    addStyleStage(style);
-    addNoise(state.fx.noise);
+    // No custom shaders. Only Bloom exists.
+    rebuildPostFx();
 
     $$('#bottomBar [data-style]').forEach((b) => b.classList.toggle('active', b.dataset.style === style));
   }
@@ -446,17 +300,10 @@ void main(){
     setBadge('intVal', intensity.toFixed(2));
     setBadge('satVal', sat.toFixed(2));
 
-    applyBloom(bloom);
-    applySharpen(sharpen);
-    applyNoise(noise);
-    applyPixelation(pix);
-
-    if (stages.style?.uniforms) {
-      if ('intensity' in stages.style.uniforms) stages.style.uniforms.intensity = intensity;
-      if ('saturation' in stages.style.uniforms) stages.style.uniforms.saturation = sat;
-    }
+    applyBloom(bloom); // only effect that actually changes rendering
   }
 
+  // --- 2D Map ---
   let map2d;
   function init2dMap() {
     const el = $('miniMapWrap');
@@ -494,6 +341,7 @@ void main(){
     if (on) init2dMap();
   }
 
+  // --- Refresh loop ---
   async function refreshAll() {
     if (state.mode !== 'LIVE') return;
     await Promise.all([updateFlights(), updateSats(), updateQuakes()]);
@@ -518,10 +366,11 @@ void main(){
     requestAnimationFrame(tick);
   }
 
+  // --- Boot ---
   window.addEventListener('load', () => {
     if (typeof Cesium === 'undefined') { alert('Cesium failed to load (check network).'); return; }
 
-    // IMPORTANT: Avoid Ion from the start (no token needed)
+    // Avoid Ion usage (no token needed)
     Cesium.Ion.defaultAccessToken = "";
 
     viewer = new Cesium.Viewer('viewer', {
@@ -541,7 +390,6 @@ void main(){
 
     viewer.scene.globe.enableLighting = true;
     viewer.scene.globe.baseColor = Cesium.Color.BLACK;
-
     viewer.scene.fog.enabled = true;
     viewer.scene.fog.density = 0.00015;
 
@@ -563,6 +411,7 @@ void main(){
       duration: 0.0,
     });
 
+    // UI initial
     $('workerBase').value = state.workerBase;
     $('layerFlights').checked = state.layers.flights;
     $('layerSats').checked = state.layers.sats;
@@ -571,6 +420,7 @@ void main(){
     $('layerTraffic').checked = state.layers.traffic;
     $('layerCctv').checked = state.layers.cctv;
 
+    // Wire toggles
     $('layerFlights').addEventListener('change', (e) => { state.layers.flights = e.target.checked; refreshAll(); });
     $('layerSats').addEventListener('change', (e) => { state.layers.sats = e.target.checked; refreshAll(); });
     $('layerQuakes').addEventListener('change', (e) => { state.layers.quakes = e.target.checked; refreshAll(); });
@@ -585,7 +435,6 @@ void main(){
     $('modePause').addEventListener('click', () => { state.mode = 'PAUSE'; $('modePause').classList.add('active'); $('modeLive').classList.remove('active'); });
 
     ['bloom','sharpen','noise','pixelation','intensity','saturation'].forEach((id) => $(id).addEventListener('input', applyFxFromUi));
-    applyFxFromUi();
 
     $('toggleMap').addEventListener('click', toggle2dMap);
 
@@ -598,7 +447,11 @@ void main(){
 
     $('cctvProject').addEventListener('click', () => { state.layers.cctv = true; $('layerCctv').checked = true; projectCctv(); });
 
+    // Build safe FX chain (Bloom only)
+    rebuildPostFx();
+    applyFxFromUi();
     applyStyle('NORMAL');
+
     setWeatherEnabled(state.layers.weather);
     setTrafficEnabled(state.layers.traffic);
 
