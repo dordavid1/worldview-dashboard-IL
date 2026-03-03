@@ -1,427 +1,438 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WorldView — Free & Legal Edition</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WORLDVIEW — OSINT Global Intelligence Interface</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#05070B;--panel:#0B1220;--accent:#00D9FF;--accent2:#4FD1C5;
+  --warn:#FFB020;--green:#00FF88;--red:#FF3B3B;
+  --dim:rgba(0,217,255,0.3);--text:rgba(0,217,255,0.85);--text-dim:rgba(0,217,255,0.45);
+  --border:rgba(0,217,255,0.18);--border2:rgba(0,217,255,0.08);
+  --glow:0 0 8px rgba(0,217,255,0.5);--glow-s:0 0 22px rgba(0,217,255,0.7);
+  --fh:'Share Tech Mono',monospace;--fl:'Rajdhani',sans-serif;--ft:'Orbitron',sans-serif;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--fh);font-size:11px}
 
-  <!-- CesiumJS -->
-  <link href="https://unpkg.com/cesium@1.115.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
-  <script src="https://unpkg.com/cesium@1.115.0/Build/Cesium/Cesium.js" defer></script>
+/* ─── EFFECTS ─── */
+#fx-canvas{position:fixed;inset:0;pointer-events:none;z-index:9000;opacity:0}
+#style-overlay{position:fixed;inset:0;pointer-events:none;z-index:8500;transition:all .3s}
+#scanline-overlay{position:fixed;inset:0;pointer-events:none;z-index:8600;opacity:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.15) 2px,rgba(0,0,0,.15) 4px);transition:opacity .3s}
+#vignette{position:fixed;inset:0;pointer-events:none;z-index:8400;background:radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,.78) 100%)}
+#noise-overlay{position:fixed;inset:0;pointer-events:none;z-index:8300;opacity:0;background-size:200px 200px;animation:noiseA .08s steps(1) infinite}
+@keyframes noiseA{0%{background-position:0 0}10%{background-position:-50px -70px}20%{background-position:80px 30px}30%{background-position:-20px 60px}40%{background-position:50px -30px}50%{background-position:-80px 20px}60%{background-position:30px -60px}70%{background-position:-40px 80px}80%{background-position:70px 10px}90%{background-position:-10px -50px}}
 
-  <!-- Satellite.js for TLE propagation -->
-  <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.1/dist/satellite.min.js" defer></script>
+/* ─── TOP HUD ─── */
+#top-hud{position:fixed;top:0;left:0;right:0;height:28px;background:rgba(5,7,11,.97);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 12px;z-index:1000}
+.hud-left{display:flex;align-items:center;gap:12px}
+.ptag{color:var(--warn);font-weight:bold;letter-spacing:2px;font-size:9px}
+.hstat{color:var(--text-dim);font-size:10px}.hstat span{color:var(--text)}
+.hud-right{display:flex;flex-direction:column;align-items:flex-end;line-height:1.2}
+.asl{color:var(--text-dim);font-size:9px;letter-spacing:2px}
+.asn{color:var(--accent);font-family:var(--ft);font-size:13px;font-weight:700;letter-spacing:3px;text-shadow:var(--glow)}
 
-  <!-- MapLibre (2D map) -->
-  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
-  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js" defer></script>
+/* ─── SIDE STRIPS ─── */
+.side-hud{position:fixed;top:50%;transform:translateY(-50%);writing-mode:vertical-rl;font-size:9px;color:var(--text-dim);z-index:900;display:flex;flex-direction:column;gap:6px;padding:8px 4px;opacity:.55}
+.lsh{left:2px}.rsh{right:2px}
 
-  <style>
-    :root{
-      --bg:#070a0f;
-      --panel:#0b1020cc;
-      --panel2:#0b1020a6;
-      --stroke:#1c2546;
-      --text:#c9d4ff;
-      --muted:#7f8bb8;
-      --accent:#7de3ff;
-      --good:#5ef0a0;
-      --warn:#ffcc66;
-      --danger:#ff5f75;
-      --shadow:0 12px 40px rgba(0,0,0,.55);
-      --radius:16px;
-      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
+/* ─── LAYOUT ─── */
+#app{position:fixed;top:28px;left:0;right:0;bottom:0;display:grid;grid-template-columns:270px 1fr 220px;overflow:hidden}
 
-    html,body{height:100%;}
-    body{
-      margin:0;
-      background: radial-gradient(1000px 600px at 50% 30%, #111a33 0%, var(--bg) 60%, #04050a 100%);
-      color:var(--text);
-      overflow:hidden;
-      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
-    }
+/* ─── LEFT PANEL ─── */
+#lp{background:rgba(11,18,32,.97);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:var(--dim) transparent;padding-bottom:12px}
+#lp::-webkit-scrollbar{width:3px}
+#lp::-webkit-scrollbar-thumb{background:var(--dim);border-radius:2px}
+.logo-wrap{padding:14px 16px 10px;border-bottom:1px solid var(--border2)}
+.logo-row{display:flex;align-items:center;gap:10px}
+.logo-g{font-size:22px;color:var(--accent);text-shadow:var(--glow-s);line-height:1}
+.logo-t{font-family:var(--ft);font-size:16px;font-weight:700;letter-spacing:2px;line-height:1}
+.lw{color:var(--accent)}.lv{color:var(--accent2)}
+.logo-s{font-size:8px;letter-spacing:3px;color:var(--text-dim);margin-top:3px;font-family:var(--fl)}
+.cls-block{padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border2)}
+.cls-br{color:var(--accent);font-size:20px;line-height:1.4;opacity:.5}
+.cls-top{color:var(--warn);font-size:9px;letter-spacing:1px}
+.cls-sub{color:var(--text-dim);font-size:9px;margin-top:2px}
+.mode-block{padding:8px 16px;border-bottom:1px solid var(--border2)}
+.mode-n{font-family:var(--ft);font-size:14px;font-weight:700;color:var(--accent);letter-spacing:3px;text-shadow:var(--glow)}
+.mode-sl{font-size:8px;letter-spacing:2px;color:var(--text-dim);margin-top:4px;font-family:var(--fl)}
+.mode-sm{font-size:10px;color:var(--text);margin-top:2px;line-height:1.4}
+.pbox{margin:8px 10px;background:rgba(0,217,255,.03);border:1px solid var(--border);border-radius:2px}
+.phdr{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border2);font-family:var(--fl);font-size:10px;font-weight:600;letter-spacing:2px;color:var(--text-dim)}
+.pbody{padding:8px;display:flex;flex-direction:column;gap:6px}
+.pbody.col{display:none}
+.hi{background:rgba(0,217,255,.05);border:1px solid var(--border);color:var(--text);font-family:var(--fh);font-size:10px;padding:5px 8px;outline:none;width:100%;border-radius:1px}
+.hi:focus{border-color:var(--accent);box-shadow:0 0 6px rgba(0,217,255,.3)}
+.hi::placeholder{color:var(--text-dim)}
+.r2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.hbtn{background:rgba(0,217,255,.08);border:1px solid var(--border);color:var(--text);font-family:var(--fl);font-size:10px;font-weight:600;letter-spacing:2px;padding:5px 10px;cursor:pointer;transition:all .15s;border-radius:1px}
+.hbtn:hover{background:rgba(0,217,255,.15);border-color:var(--accent);color:var(--accent);box-shadow:var(--glow)}
+.hbtn.pri{background:rgba(0,217,255,.15);border-color:rgba(0,217,255,.5);color:var(--accent)}
+.hbtn.full{width:100%}
+.ibtn{background:rgba(0,217,255,.06);border:1px solid var(--border);color:var(--text-dim);font-size:12px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;border-radius:1px;padding:0;line-height:1}
+.ibtn:hover{color:var(--accent);border-color:var(--accent)}
+.ibtn.t{width:18px;height:16px;font-size:9px}
+.ibtn.s{width:18px;height:18px;font-size:10px}
+#lbody{padding:4px 0}
+.lr{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border2);transition:background .15s}
+.lr:hover{background:rgba(0,217,255,.04)}
+.lr:last-child{border-bottom:none}
+.li{font-size:14px;min-width:20px;text-align:center}
+.linf{flex:1;min-width:0}
+.ln{font-family:var(--fl);font-size:11px;font-weight:600;color:var(--text);letter-spacing:.5px}
+.lm{font-size:9px;color:var(--text-dim);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lc{font-size:10px;color:var(--text-dim);min-width:28px;text-align:right}
+.tb{background:rgba(255,59,59,.1);border:1px solid rgba(255,59,59,.3);color:rgba(255,59,59,.7);font-family:var(--fl);font-size:9px;font-weight:700;letter-spacing:1px;padding:2px 6px;cursor:pointer;transition:all .15s;border-radius:1px;min-width:32px}
+.tb:hover{background:rgba(255,59,59,.2)}
+.tb.on{background:rgba(0,217,255,.15);border-color:rgba(0,217,255,.5);color:var(--accent);box-shadow:0 0 8px rgba(0,217,255,.3)}
+#live-ctrl{display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border2);border-bottom:1px solid var(--border2);margin:4px 10px}
+.lbtn{flex:1;background:rgba(0,217,255,.05);border:1px solid var(--border);color:var(--text-dim);font-family:var(--fl);font-size:10px;font-weight:600;letter-spacing:1.5px;padding:5px;cursor:pointer;transition:all .15s;border-radius:1px}
+.lbtn:hover{border-color:var(--accent);color:var(--accent)}
+.lbtn.active{background:rgba(0,217,255,.1);border-color:rgba(0,217,255,.4);color:var(--accent);animation:pL 2s ease-in-out infinite}
+@keyframes pL{0%,100%{box-shadow:0 0 4px rgba(0,217,255,.3)}50%{box-shadow:0 0 14px rgba(0,217,255,.7)}}
+#coords{padding:6px 10px}
+.cm{font-size:10px;color:var(--warn);letter-spacing:1px}
+.cd{font-size:10px;color:var(--text-dim);margin-top:2px}
+.vtag{padding:4px 10px 0;font-size:9px;color:var(--warn);letter-spacing:2px;font-family:var(--ft)}
 
-    /* subtle global noise */
-    .noise::before{
-      content:"";
-      position:fixed; inset:0;
-      background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.12"/></svg>');
-      mix-blend-mode: overlay;
-      opacity:.18;
-      pointer-events:none;
-      z-index:4;
-    }
+/* ─── GLOBE CENTER ─── */
+#gw{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);overflow:hidden}
+#gc{position:absolute;inset:0;pointer-events:none;z-index:100}
+.gcr{position:absolute;width:20px;height:20px;border-color:var(--accent);border-style:solid;opacity:.4}
+.gcr-tl{top:4px;left:4px;border-width:1px 0 0 1px}
+.gcr-tr{top:4px;right:4px;border-width:1px 1px 0 0}
+.gcr-bl{bottom:185px;left:4px;border-width:0 0 1px 1px}
+.gcr-br{bottom:185px;right:4px;border-width:0 1px 1px 0}
+#gv{position:relative;width:min(calc(100vh - 260px),calc(100% - 20px));aspect-ratio:1/1;border-radius:50%;overflow:hidden;border:2px solid rgba(0,217,255,.25);box-shadow:0 0 0 1px rgba(0,217,255,.08),0 0 55px rgba(0,100,180,.35),inset 0 0 55px rgba(0,0,0,.5);flex-shrink:0;cursor:grab;transition:border-color .3s,box-shadow .3s}
+#gv:active{cursor:grabbing}
+#map{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;overflow:hidden}
+#oc{position:absolute;inset:0;pointer-events:none;border-radius:50%;z-index:50}
+#ret{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:60;opacity:.32}
+.rr{position:absolute;width:80px;height:80px;border:1px solid var(--accent);border-radius:50%}
+.rh,.rv{position:absolute;background:var(--accent)}
+.rh{width:100px;height:1px}.rv{width:1px;height:100px}
+#mtip{position:absolute;background:rgba(11,18,32,.97);border:1px solid var(--accent);color:var(--accent);font-family:var(--fh);font-size:10px;padding:5px 10px;pointer-events:none;z-index:200;white-space:nowrap;box-shadow:var(--glow);border-radius:2px;line-height:1.5}
+#mtip.h{display:none}
+#tlb{position:absolute;top:8px;left:50%;transform:translateX(-50%);font-size:18px;cursor:pointer;opacity:.42;z-index:200;transition:opacity .2s}
+#tlb:hover{opacity:1}
 
-    #root{position:fixed; inset:0;}
+/* ─── BOTTOM BAR ─── */
+#bb{position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:100%;background:rgba(7,11,20,.97);border:1px solid var(--border);border-radius:4px 4px 0 0;padding:8px 12px;z-index:150;backdrop-filter:blur(12px)}
+.bh{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.bl{font-family:var(--fl);font-size:9px;letter-spacing:2px;color:var(--text-dim);font-weight:500}
+#slr{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px;padding-bottom:5px;border-bottom:1px solid var(--border2)}
+#slr.h{display:none}
+.slb{background:rgba(0,217,255,.06);border:1px solid var(--border);color:var(--text-dim);font-family:var(--fh);font-size:9px;padding:2px 8px;cursor:pointer;border-radius:10px;transition:all .15s;display:flex;align-items:center;gap:4px}
+.slb::before{content:'◎';font-size:8px;color:var(--accent2)}
+.slb:hover,.slb.a{background:rgba(0,217,255,.15);color:var(--accent);border-color:var(--accent)}
+#cr{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.cb{background:transparent;border:none;color:var(--text-dim);font-family:var(--fl);font-size:11px;font-weight:500;padding:3px 8px;cursor:pointer;border-radius:2px;transition:all .15s;white-space:nowrap}
+.cb:hover{color:var(--accent)}
+.cb.a{background:rgba(0,217,255,.12);border:1px solid rgba(0,217,255,.3);color:var(--accent);box-shadow:var(--glow)}
+.ld{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);margin-left:auto;animation:blink 1s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.18}}
+#ps{margin-top:6px;border-top:1px solid var(--border2);padding-top:6px}
+#pr{display:flex;gap:4px;flex-wrap:wrap}
+.pb{background:rgba(0,217,255,.04);border:1px solid var(--border);color:var(--text-dim);font-family:var(--fl);font-size:10px;font-weight:500;padding:5px 8px;cursor:pointer;transition:all .2s;border-radius:2px;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:52px}
+.pb:hover{border-color:var(--accent);color:var(--accent);background:rgba(0,217,255,.08)}
+.pb.a{background:rgba(0,217,255,.12);border-color:var(--accent);color:var(--accent);box-shadow:var(--glow)}
+.pi2{width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:13px}
+.pi-o::before{content:'○'}.pi-sq::before{content:'▣'}.pi-m::before{content:'☽'}
+.pi-f::before{content:'⊞';color:#FF6B35}.pi-st::before{content:'✦'}.pi-h::before{content:'◑'}
+.pi-sn::before{content:'❄'}.pi-ai::before{content:'⬟';color:#B4A0FF}
 
-    /* Circular viewport */
-    #viewportWrap{
-      position:absolute;
-      inset:0;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      pointer-events:none;
-    }
+/* ─── RIGHT PANEL ─── */
+#rp{background:rgba(11,18,32,.97);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:var(--dim) transparent;padding-bottom:10px}
+#rp::-webkit-scrollbar{width:3px}
+#rp::-webkit-scrollbar-thumb{background:var(--dim);border-radius:2px}
+#rec{padding:10px 12px;border-bottom:1px solid var(--border2)}
+.rrow{display:flex;align-items:flex-start;gap:8px}
+.rdot{color:var(--red);font-size:10px;animation:blink 1s ease-in-out infinite;margin-top:2px}
+.rts{font-family:var(--fh);font-size:10px;color:var(--accent);letter-spacing:1px}
+.rorb{font-family:var(--fh);font-size:9px;color:var(--text-dim);margin-top:2px}
+.ppb{padding:8px 12px;border-bottom:1px solid var(--border2)}
+.pph{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.pphb{display:flex;align-items:center;gap:8px;margin-bottom:6px;background:rgba(0,217,255,.06);border:1px solid var(--border);padding:4px 8px;cursor:pointer;border-radius:1px}
+.pphb:hover{border-color:var(--accent)}
+.pphb.pon{background:rgba(0,255,136,.1);border-color:rgba(0,255,136,.4)}
+.ppic{font-size:12px;color:var(--accent)}
+.ppl{font-family:var(--fl);font-size:10px;font-weight:600;letter-spacing:2px;color:var(--text);flex:1}
+.psr{display:flex;align-items:center;gap:8px}
+.pr2{display:flex;align-items:center;gap:8px}
+.pps{font-family:var(--fl);font-size:9px;letter-spacing:1px;color:var(--text-dim);min-width:55px;font-weight:500}
+.pir{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.fg{flex:1}
+.pled{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s ease-in-out infinite}
+.hs{flex:1;-webkit-appearance:none;appearance:none;height:3px;background:rgba(0,217,255,.15);outline:none;cursor:pointer;border-radius:1px}
+.hs::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent);cursor:pointer;box-shadow:0 0 6px rgba(0,217,255,.7)}
+.hs::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--accent);cursor:pointer;box-shadow:0 0 6px rgba(0,217,255,.7);border:none}
+.sv{font-family:var(--fh);font-size:10px;color:var(--text-dim);min-width:32px;text-align:right}
+.hsel{background:rgba(0,217,255,.06);border:1px solid var(--border);color:var(--text);font-family:var(--fh);font-size:10px;padding:3px 6px;outline:none;cursor:pointer;flex:1}
+.hsel:focus{border-color:var(--accent)}
+.hsel option{background:#0B1220}
+.pbr{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border2)}
+.pbr .hbtn{flex:1}
+#telem{margin-top:auto;padding:10px 12px;border-top:1px solid var(--border2)}
+.tr2{display:flex;align-items:center;gap:4px;margin-bottom:3px;font-family:var(--fh);font-size:11px;flex-wrap:wrap}
+.tl2{color:var(--text-dim);font-size:9px}
+.tv2{color:var(--text);font-size:11px;margin-right:6px}
+.tv2.ac{color:var(--warn);font-weight:bold}
 
-    #viewport{
-      width:min(86vmin, 980px);
-      height:min(86vmin, 980px);
-      border-radius:999px;
-      overflow:hidden;
-      box-shadow: 0 0 0 1px rgba(125,227,255,.12), 0 0 0 12px rgba(10,12,22,.75), var(--shadow);
-      position:relative;
-      pointer-events:auto;
-      background:#000;
-    }
+/* ─── TOASTS ─── */
+#tc{position:fixed;bottom:20px;right:230px;z-index:10000;display:flex;flex-direction:column;gap:6px}
+.tst{background:rgba(11,18,32,.97);border:1px solid var(--accent);color:var(--accent);font-family:var(--fh);font-size:10px;padding:6px 14px;border-radius:2px;box-shadow:var(--glow);animation:tIn .2s ease}
+@keyframes tIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
-    #viewer{position:absolute; inset:0;}
-    /* Cesium canvas tuning (no WebGL custom shaders) */
-    #viewport canvas{
-      filter: brightness(var(--fx-bright,1)) contrast(var(--fx-contrast,1)) saturate(var(--fx-sat,1));
-    }
+/* ─── PRESETS ─── */
+body.mode-crt #gv{border-radius:48% 48% 50% 50%/45% 45% 55% 55%;border-color:rgba(0,217,255,.4);box-shadow:0 0 0 2px rgba(0,217,255,.12),0 0 70px rgba(0,180,255,.5),inset 0 0 60px rgba(0,0,50,.4)}
+body.mode-crt #scanline-overlay{opacity:1}
+body.mode-crt #style-overlay{background:linear-gradient(rgba(0,217,255,.04) 50%,rgba(0,0,0,.04) 50%);background-size:100% 4px;mix-blend-mode:overlay}
+body.mode-crt #noise-overlay{opacity:.42}
+body.mode-crt{animation:flick 8s infinite}
+body.mode-crt .asn{letter-spacing:6px}
 
-    /* CRT / NVG / FLIR / NOIR / SNOW / ANIME overlays */
-    #styleOverlay{
-      position:absolute; inset:0;
-      pointer-events:none;
-      z-index:3;
-      opacity:0;
-      transition:opacity .15s ease;
-    }
-    body.style-crt #styleOverlay{opacity:.75;}
-    body.style-nvg #styleOverlay{opacity:.55;}
-    body.style-flir #styleOverlay{opacity:.40;}
-    body.style-noir #styleOverlay{opacity:.25;}
-    body.style-snow #styleOverlay{opacity:.35;}
-    body.style-anime #styleOverlay{opacity:.18;}
+body.mode-nvg #map{filter:saturate(0) brightness(.35) contrast(1.3)}
+body.mode-nvg #style-overlay{background:rgba(0,255,80,.22);mix-blend-mode:screen}
+body.mode-nvg #noise-overlay{opacity:.28}
+body.mode-nvg #scanline-overlay{opacity:.42}
+body.mode-nvg #gv{border-color:rgba(0,255,100,.5);box-shadow:0 0 60px rgba(0,255,80,.3),inset 0 0 40px rgba(0,0,0,.5)}
+body.mode-nvg .asn{color:#00FF88}
 
-    /* Scanlines */
-    #styleOverlay::before{
-      content:"";
-      position:absolute; inset:0;
-      background: repeating-linear-gradient(
-        to bottom,
-        rgba(255,255,255,0.05),
-        rgba(255,255,255,0.05) 2px,
-        rgba(0,0,0,0) 2px,
-        rgba(0,0,0,0) 5px
-      );
-      mix-blend-mode:overlay;
-      opacity:.9;
-    }
+body.mode-flir #map{filter:saturate(0) brightness(.55) contrast(1.6)}
+body.mode-flir #style-overlay{background:linear-gradient(135deg,rgba(255,50,0,.45) 0%,rgba(255,130,0,.3) 40%,rgba(255,210,0,.2) 70%,rgba(100,210,255,.15) 100%);mix-blend-mode:hard-light}
+body.mode-flir #gv{border-color:rgba(255,107,53,.5);box-shadow:0 0 50px rgba(255,80,0,.4)}
+body.mode-flir .asn{color:#FF6B35}
+body.mode-flir #noise-overlay{opacity:.14}
 
-    /* tint/vignette */
-    #styleOverlay::after{
-      content:"";
-      position:absolute; inset:-20%;
-      background:
-        radial-gradient(circle at 50% 45%, rgba(255,255,255,.08) 0%, rgba(0,0,0,0) 52%),
-        radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 42%, rgba(0,0,0,.72) 80%);
-      opacity:1;
-      filter: blur(0.2px);
-    }
+body.mode-noir #map{filter:saturate(0) contrast(1.4) brightness(.65)}
+body.mode-noir .asn{color:#AAA}
 
-    /* Per-style color tint */
-    body.style-crt #viewport canvas{ filter: brightness(var(--fx-bright,1)) contrast(calc(var(--fx-contrast,1) * 1.08)) saturate(calc(var(--fx-sat,1) * 0.9)) hue-rotate(2deg); }
-    body.style-nvg #viewport canvas{ filter: brightness(calc(var(--fx-bright,1) * 1.05)) contrast(calc(var(--fx-contrast,1) * 1.15)) saturate(0.15) hue-rotate(90deg); }
-    body.style-flir #viewport canvas{ filter: brightness(calc(var(--fx-bright,1) * 1.05)) contrast(calc(var(--fx-contrast,1) * 1.25)) saturate(1.1) hue-rotate(210deg); }
-    body.style-noir #viewport canvas{ filter: brightness(var(--fx-bright,1)) contrast(calc(var(--fx-contrast,1) * 1.15)) saturate(0.0); }
-    body.style-snow #viewport canvas{ filter: brightness(calc(var(--fx-bright,1) * 1.10)) contrast(calc(var(--fx-contrast,1) * 1.05)) saturate(0.85); }
-    body.style-anime #viewport canvas{ filter: brightness(var(--fx-bright,1)) contrast(calc(var(--fx-contrast,1) * 1.05)) saturate(calc(var(--fx-sat,1) * 1.25)); }
+body.mode-snow #map{filter:saturate(.15) brightness(1.6) contrast(.75)}
+body.mode-snow #noise-overlay{opacity:.85}
+body.mode-snow .asn{color:#C8E6FF}
+body.mode-snow #gv{border-color:rgba(200,230,255,.4)}
 
-    /* Noise layer controlled by slider */
-    #noiseOverlay{
-      position:absolute; inset:0;
-      pointer-events:none;
-      z-index:2;
-      opacity:0;
-      transition:opacity .1s ease;
-      background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/></filter><rect width="140" height="140" filter="url(%23n)" opacity="0.22"/></svg>');
-      mix-blend-mode: overlay;
-    }
+body.mode-anime #map{filter:saturate(2.2) contrast(1.5) brightness(1.15)}
+body.mode-anime #style-overlay{background:linear-gradient(to bottom,rgba(255,200,255,.06),rgba(200,200,255,.06))}
+body.mode-anime #gv{border-color:#FF6EB4;box-shadow:0 0 50px rgba(255,110,180,.45),0 0 90px rgba(180,160,255,.2)}
+body.mode-anime .asn{color:#FF6EB4}
 
-    /* HUD panels */
-    .panel{
-      position:absolute;
-      background: linear-gradient(180deg, rgba(16,20,40,.88) 0%, rgba(10,14,28,.78) 100%);
-      border:1px solid rgba(125,227,255,.12);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(10px);
-      z-index:5;
-    }
+body.mode-ai #map{filter:saturate(1.6) hue-rotate(25deg) brightness(1.1)}
+body.mode-ai #style-overlay{background:linear-gradient(to bottom right,rgba(180,160,255,.1),rgba(100,200,255,.1))}
+body.mode-ai #gv{border-color:#B4A0FF;box-shadow:0 0 50px rgba(180,160,255,.4)}
+body.mode-ai .asn{color:#B4A0FF}
 
-    #leftPanel{
-      left:22px; top:22px;
-      width:330px;
-      padding:14px 14px 12px;
-    }
+@keyframes flick{0%,100%{opacity:1}92%{opacity:1}93%{opacity:.75}94%{opacity:1}96%{opacity:.85}97%{opacity:1}}
+@keyframes glitch{0%{transform:translateX(0)}20%{transform:translateX(-2px) skew(-1deg)}40%{transform:translateX(2px) skew(1deg)}60%{transform:translateX(-1px)}80%{transform:translateX(1px)}100%{transform:translateX(0)}}
 
-    #rightPanel{
-      right:22px; top:120px;
-      width:320px;
-      padding:14px;
-    }
+/* Leaflet */
+.leaflet-container{background:#06090F!important}
+.leaflet-control-zoom,.leaflet-control-attribution{display:none!important}
+.leaflet-popup-content-wrapper{background:rgba(11,18,32,.97)!important;border:1px solid var(--accent)!important;border-radius:2px!important;box-shadow:var(--glow)!important;color:var(--accent)!important;font-family:var(--fh)!important;font-size:10px!important}
+.leaflet-popup-tip{background:rgba(11,18,32,.97)!important}
+.leaflet-popup-close-button{color:var(--accent)!important}
 
-    #topHeader{
-      position:absolute;
-      left:22px; right:22px; top:12px;
-      display:flex;
-      justify-content:space-between;
-      align-items:flex-start;
-      z-index:6;
-      pointer-events:none;
-    }
-
-    .brand{
-      pointer-events:none;
-      display:flex; flex-direction:column; gap:6px;
-      text-transform:uppercase;
-      letter-spacing:.35em;
-      font-weight:700;
-    }
-    .brand .title{font-size:22px; color:#e8ecff;}
-    .brand .subtitle{font-size:11px; color:var(--muted); letter-spacing:.28em;}
-
-    .topMeta{
-      pointer-events:none;
-      font-family:var(--mono);
-      font-size:12px;
-      color:rgba(201,212,255,.8);
-      text-align:right;
-    }
-
-    #bottomBar{
-      position:absolute;
-      left:50%;
-      bottom:18px;
-      transform:translateX(-50%);
-      display:flex;
-      gap:10px;
-      z-index:6;
-    }
-
-    .chip{
-      background: rgba(10,14,28,.75);
-      border:1px solid rgba(125,227,255,.12);
-      border-radius: 14px;
-      padding:10px 12px;
-      display:flex;
-      gap:10px;
-      align-items:center;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(10px);
-    }
-
-    .btn{
-      appearance:none;
-      border:1px solid rgba(125,227,255,.16);
-      background: linear-gradient(180deg, rgba(20,26,52,.85) 0%, rgba(10,14,28,.85) 100%);
-      color:var(--text);
-      font-family:var(--mono);
-      font-size:12px;
-      padding:10px 12px;
-      border-radius: 12px;
-      cursor:pointer;
-    }
-    .btn:hover{border-color: rgba(125,227,255,.28)}
-    .btn.active{outline: 1px solid rgba(125,227,255,.45); box-shadow: 0 0 0 3px rgba(125,227,255,.1);}
-
-    .row{display:flex; gap:10px; align-items:center; justify-content:space-between;}
-    .row + .row{margin-top:10px;}
-
-    .label{font-family:var(--mono); font-size:11px; color:rgba(201,212,255,.8); letter-spacing:.08em; text-transform:uppercase;}
-    .small{font-size:11px; color:var(--muted); line-height:1.35;}
-
-    .toggle{display:flex; align-items:center; gap:10px;}
-    .toggle input{width:16px; height:16px; accent-color: var(--accent);}
-
-    .divider{height:1px; background:rgba(125,227,255,.10); margin:12px 0;}
-
-    .slider{ width:100%; accent-color: var(--accent); }
-
-    #miniMapWrap{
-      position:absolute;
-      left:22px;
-      bottom:22px;
-      width:330px;
-      height:220px;
-      z-index:6;
-      border-radius: var(--radius);
-      overflow:hidden;
-      box-shadow: var(--shadow);
-      border:1px solid rgba(125,227,255,.12);
-      background:#070a0f;
-      display:none;
-    }
-    #miniMap{position:absolute; inset:0;}
-
-    .badge{
-      font-family:var(--mono);
-      font-size:10px;
-      padding:3px 8px;
-      border-radius: 999px;
-      border:1px solid rgba(125,227,255,.18);
-      background: rgba(10,14,28,.65);
-      color:rgba(201,212,255,.85);
-    }
-
-    .field{
-      width:100%;
-      padding:10px;
-      border-radius:12px;
-      border:1px solid rgba(125,227,255,.14);
-      background:rgba(5,7,14,.6);
-      color:var(--text);
-      font-family:var(--mono);
-      font-size:12px;
-      outline:none;
-    }
-    select.field{appearance:none;}
-
-    /* Responsive */
-    @media (max-width: 980px){
-      #leftPanel{width:300px}
-      #rightPanel{display:none}
-    }
-    @media (max-width: 780px){
-      #leftPanel{display:none}
-      #miniMapWrap{display:none}
-    }
-  </style>
+/* Markers */
+.fmk{color:var(--accent);line-height:1;filter:drop-shadow(0 0 4px rgba(0,217,255,.7));cursor:pointer}
+.smk{color:var(--warn);font-size:9px;font-family:var(--fh);cursor:pointer;text-shadow:0 0 4px var(--warn);white-space:nowrap;background:rgba(11,18,32,.75);padding:1px 3px}
+.cmk{color:var(--green);font-size:18px;text-shadow:0 0 8px var(--green);cursor:pointer}
+body.ui-clean #lp,body.ui-clean #rp,body.ui-clean #top-hud,body.ui-clean .side-hud{opacity:0;pointer-events:none;transition:opacity .4s}
+</style>
 </head>
+<body>
 
-<body class="noise style-normal">
-  <div id="root">
-    <div id="topHeader">
-      <div class="brand">
-        <div class="title">WORLDVIEW</div>
-        <div class="subtitle">FREE + LEGAL / OSINT SHELL</div>
-      </div>
-      <div class="topMeta">
-        <div><span class="badge" id="activeStyle">STYLE: NORMAL</span></div>
-        <div style="margin-top:8px; opacity:.8;">REC <span id="recTime">—</span></div>
-      </div>
-    </div>
+<!-- Effects -->
+<canvas id="fx-canvas"></canvas>
+<div id="style-overlay"></div>
+<div id="scanline-overlay"></div>
+<div id="vignette"></div>
+<div id="noise-overlay"></div>
+<div id="tc"></div><!-- toasts -->
 
-    <div id="viewportWrap">
-      <div id="viewport">
-        <div id="viewer"></div>
-        <div id="noiseOverlay"></div>
-        <div id="styleOverlay"></div>
-      </div>
-    </div>
+<!-- Top HUD -->
+<div id="top-hud">
+  <div class="hud-left">
+    <span class="ptag">PANOPTIC</span>
+    <span class="hstat">VIS:<span id="vis-val">124</span></span>
+    <span class="hstat">SRC:<span id="src-val">180</span></span>
+    <span class="hstat">DENS:<span id="dens-val">0.46</span></span>
+    <span class="hstat"><span id="ms-val">0.4</span>ms</span>
+  </div>
+  <div class="hud-right">
+    <span class="asl">ACTIVE STYLE</span>
+    <span class="asn" id="asn">NORMAL</span>
+  </div>
+</div>
 
-    <div id="leftPanel" class="panel">
-      <div class="row">
-        <div class="label">LAYERS</div>
-        <button class="btn" id="refreshBtn">REFRESH</button>
-      </div>
+<div class="side-hud lsh"><div id="lht">00:00:00Z</div><div>OMA:13.7</div><div>BITS:15</div></div>
+<div class="side-hud rsh"><div>BAND:PAR</div><div>FAR</div><div>LIVE:1</div></div>
 
-      <div class="divider"></div>
+<div id="app">
 
-      <div class="row"><label class="toggle"><input type="checkbox" id="layerFlights" checked> <span class="label">Live Flights</span></label></div>
-      <div class="row"><label class="toggle"><input type="checkbox" id="layerSats" checked> <span class="label">Satellites</span></label></div>
-      <div class="row"><label class="toggle"><input type="checkbox" id="layerQuakes" checked> <span class="label">Earthquakes</span></label></div>
-      <div class="row"><label class="toggle"><input type="checkbox" id="layerWeather"> <span class="label">Weather Radar</span></label></div>
-      <div class="row"><label class="toggle"><input type="checkbox" id="layerTraffic"> <span class="label">Traffic Glow</span></label></div>
-      <div class="row"><label class="toggle"><input type="checkbox" id="layerCctv"> <span class="label">CCTV Mesh (authorized)</span></label></div>
-
-      <div class="divider"></div>
-
-      <div class="label" style="margin-bottom:8px;">CCTV (optional)</div>
-      <div class="small">Paste a permitted MP4/HLS URL, then set lat/lon. We project it onto the ground.</div>
-      <div style="margin-top:10px; display:flex; gap:8px;">
-        <input id="cctvUrl" placeholder="https://…/camera.mp4" class="field" style="flex:1;" />
-        <button class="btn" id="cctvProject">PROJECT</button>
-      </div>
-
-      <div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-        <input id="cctvLat" placeholder="lat" class="field" />
-        <input id="cctvLon" placeholder="lon" class="field" />
-      </div>
-
-      <div class="divider"></div>
-      <div class="label">TELEMETRY</div>
-      <div class="small" style="margin-top:6px;">
-        FPS: <span id="fps">—</span> · Entities: <span id="entityCount">—</span> · Time: <span id="simTime">—</span>
+  <!-- LEFT -->
+  <div id="lp">
+    <div class="logo-wrap">
+      <div class="logo-row">
+        <div class="logo-g">◉</div>
+        <div>
+          <div class="logo-t"><span class="lw">W O R L D</span><span class="lv">V I E W</span></div>
+          <div class="logo-s">N O &nbsp; P L A C E &nbsp; L E F T &nbsp; B E H I N D</div>
+        </div>
       </div>
     </div>
 
-    <div id="rightPanel" class="panel">
-      <div class="row">
-        <div class="label">VISUAL</div>
-        <button class="btn" id="toggleMap">2D MAP</button>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="label" style="margin-bottom:8px;">Base Map</div>
-      <select id="imagerySel" class="field">
-        <option value="ESRI">ESRI Satellite (default)</option>
-        <option value="OSM">OpenStreetMap</option>
-      </select>
-
-      <div class="divider"></div>
-
-      <div class="row"><div class="label">Bloom</div><div class="badge" id="bloomVal">0.35</div></div>
-      <input class="slider" id="bloom" type="range" min="0" max="1" step="0.01" value="0.35" />
-
-      <div class="row" style="margin-top:10px;"><div class="label">Sharpen (contrast)</div><div class="badge" id="sharpenVal">0.20</div></div>
-      <input class="slider" id="sharpen" type="range" min="0" max="1" step="0.01" value="0.20" />
-
-      <div class="row" style="margin-top:10px;"><div class="label">Noise</div><div class="badge" id="noiseVal">0.25</div></div>
-      <input class="slider" id="noise" type="range" min="0" max="1" step="0.01" value="0.25" />
-
-      <div class="divider"></div>
-      <div class="label">Style Params</div>
-      <div class="small" style="margin-top:6px;">(no WebGL custom shaders — stable)</div>
-
-      <div class="row" style="margin-top:10px;"><div class="label">Pixelation (resolution)</div><div class="badge" id="pixVal">0.00</div></div>
-      <input class="slider" id="pixelation" type="range" min="0" max="1" step="0.01" value="0" />
-
-      <div class="row" style="margin-top:10px;"><div class="label">Intensity (brightness)</div><div class="badge" id="intVal">0.75</div></div>
-      <input class="slider" id="intensity" type="range" min="0" max="1" step="0.01" value="0.75" />
-
-      <div class="row" style="margin-top:10px;"><div class="label">Saturation</div><div class="badge" id="satVal">0.00</div></div>
-      <input class="slider" id="saturation" type="range" min="0" max="1" step="0.01" value="0" />
-
-      <div class="divider"></div>
-
-      <div class="small">Cesium ion token (optional):</div>
-      <input id="ionToken" placeholder="paste ion token (optional)" class="field" style="margin-top:8px;" />
-      <button class="btn" id="saveToken" style="margin-top:10px; width:100%;">SAVE TOKEN</button>
-
-      <div class="divider"></div>
-
-      <div class="small">Worker base URL (optional, for flights CORS):</div>
-      <input id="workerBase" placeholder="https://your-worker.workers.dev" class="field" style="margin-top:8px;" />
-      <button class="btn" id="saveWorker" style="margin-top:10px; width:100%;">SAVE WORKER URL</button>
-    </div>
-
-    <div id="miniMapWrap"><div id="miniMap"></div></div>
-
-    <div id="bottomBar">
-      <div class="chip">
-        <button class="btn active" data-style="NORMAL">NORMAL</button>
-        <button class="btn" data-style="CRT">CRT</button>
-        <button class="btn" data-style="NVG">NVG</button>
-        <button class="btn" data-style="FLIR">FLIR</button>
-        <button class="btn" data-style="NOIR">NOIR</button>
-        <button class="btn" data-style="SNOW">SNOW</button>
-        <button class="btn" data-style="ANIME">ANIME</button>
-      </div>
-      <div class="chip" style="gap:12px;">
-        <span class="label">MODE</span>
-        <button class="btn active" id="modeLive">LIVE</button>
-        <button class="btn" id="modePause">PAUSE</button>
+    <div class="cls-block">
+      <div class="cls-br">[</div>
+      <div>
+        <div class="cls-top">TOP SECRET // SI-TK // NOFORN</div>
+        <div class="cls-sub">KH11-4166 OPS-4117</div>
       </div>
     </div>
 
+    <div class="mode-block">
+      <div class="mode-n" id="mode-n">NORMAL</div>
+      <div class="mode-sl">SUMMARY</div>
+      <div class="mode-sm" id="mode-sm">NORMAL GLOBAL VIEW — WORLDWIDE</div>
+    </div>
+
+    <div class="pbox">
+      <div class="phdr"><span>CCTV MESH</span><button class="ibtn" id="cctv-xb">+</button></div>
+      <div class="pbody col" id="cctv-body">
+        <input type="text" id="cu" placeholder="HLS / MP4 Stream URL" class="hi">
+        <div class="r2">
+          <input type="number" id="clat" placeholder="LAT" class="hi" step="0.0001">
+          <input type="number" id="clon" placeholder="LON" class="hi" step="0.0001">
+        </div>
+        <button class="hbtn pri full" id="cadd">ADD STREAM</button>
+      </div>
+    </div>
+
+    <div class="pbox">
+      <div class="phdr"><span>DATA LAYERS</span><button class="ibtn" id="lmin">−</button></div>
+      <div id="lbody">
+        <div class="lr"><span class="li">✈</span><div class="linf"><div class="ln">Live Flights</div><div class="lm">OpenSky Network · <span id="fu">never</span></div></div><span class="lc" id="fc">—</span><button class="tb" id="tf" data-layer="flights">OFF</button></div>
+        <div class="lr"><span class="li">🌋</span><div class="linf"><div class="ln">Earthquakes (24h)</div><div class="lm">USGS · <span id="eu">never</span></div></div><span class="lc" id="ec">—</span><button class="tb" id="te" data-layer="earthquakes">OFF</button></div>
+        <div class="lr"><span class="li">🛰</span><div class="linf"><div class="ln">Satellites</div><div class="lm">CelesTrak · <span id="su">never</span></div></div><span class="lc" id="sc">180</span><button class="tb" id="ts" data-layer="satellites">OFF</button></div>
+        <div class="lr"><span class="li">🚗</span><div class="linf"><div class="ln">Street Traffic</div><div class="lm">OpenStreetMap · <span id="tru">never</span></div></div><span class="lc" id="trc">—</span><button class="tb" id="tt" data-layer="traffic">OFF</button></div>
+        <div class="lr"><span class="li">🌩</span><div class="linf"><div class="ln">Weather Radar</div><div class="lm">NOAA NEXRAD · <span id="wu">never</span></div></div><span class="lc" id="wc">—</span><button class="tb" id="tw" data-layer="weather">OFF</button></div>
+        <div class="lr"><span class="li">📹</span><div class="linf"><div class="ln">CCTV Mesh</div><div class="lm">CCTV + StreetView fallback · <span id="clu">never</span></div></div><span class="lc" id="clc">0</span><button class="tb" id="tcctv" data-layer="cctv">OFF</button></div>
+      </div>
+    </div>
+
+    <div id="live-ctrl">
+      <button class="lbtn active" id="bl">● LIVE</button>
+      <button class="lbtn" id="bp">⏸ PAUSE</button>
+    </div>
+
+    <div id="coords">
+      <div class="cm" id="mgrs">MGRS: 30U YC 0286 0972</div>
+      <div class="cd" id="dd">51°30'08.03"N 000°04'36.90"W</div>
+    </div>
+    <div class="vtag" id="vtag">VEH-2017</div>
   </div>
 
-  <script src="js/main.js" defer></script>
+  <!-- CENTER -->
+  <div id="gw">
+    <div id="gc">
+      <div class="gcr gcr-tl"></div><div class="gcr gcr-tr"></div>
+      <div class="gcr gcr-bl"></div><div class="gcr gcr-br"></div>
+    </div>
+    <div id="gv">
+      <div id="map"></div>
+      <canvas id="oc"></canvas>
+      <div id="ret"><div class="rr"></div><div class="rh"></div><div class="rv"></div></div>
+      <div id="mtip" class="h"></div>
+    </div>
+    <div id="tlb">⛓</div>
+
+    <div id="bb">
+      <div class="bh"><span class="bl">LOCATIONS</span><button class="ibtn s" id="slt">+</button></div>
+      <div id="slr" class="h"></div>
+      <div id="cr">
+        <button class="cb" data-city="Austin" data-lat="30.2672" data-lon="-97.7431" data-zoom="13">Austin</button>
+        <button class="cb" data-city="San Francisco" data-lat="37.7749" data-lon="-122.4194" data-zoom="13">San Francisco</button>
+        <button class="cb" data-city="New York" data-lat="40.7128" data-lon="-74.0060" data-zoom="13">New York</button>
+        <button class="cb" data-city="Tokyo" data-lat="35.6762" data-lon="139.6503" data-zoom="13">Tokyo</button>
+        <button class="cb" data-city="London" data-lat="51.5074" data-lon="-0.1278" data-zoom="13">London</button>
+        <button class="cb" data-city="Paris" data-lat="48.8566" data-lon="2.3522" data-zoom="13">Paris</button>
+        <button class="cb" data-city="Dubai" data-lat="25.2048" data-lon="55.2708" data-zoom="13">Dubai</button>
+        <button class="cb" data-city="Washington DC" data-lat="38.9072" data-lon="-77.0369" data-zoom="13">Washington DC</button>
+        <div class="ld"></div>
+      </div>
+      <div id="ps">
+        <div class="bh"><span class="bl">STYLE PRESETS</span></div>
+        <div id="pr">
+          <button class="pb a" data-preset="normal"><div class="pi2 pi-o"></div><span>Normal</span></button>
+          <button class="pb" data-preset="crt"><div class="pi2 pi-sq"></div><span>CRT</span></button>
+          <button class="pb" data-preset="nvg"><div class="pi2 pi-m"></div><span>NVG</span></button>
+          <button class="pb" data-preset="flir"><div class="pi2 pi-f"></div><span>FLIR</span></button>
+          <button class="pb" data-preset="anime"><div class="pi2 pi-st"></div><span>Anime</span></button>
+          <button class="pb" data-preset="noir"><div class="pi2 pi-h"></div><span>Noir</span></button>
+          <button class="pb" data-preset="snow"><div class="pi2 pi-sn"></div><span>Snow</span></button>
+          <button class="pb" data-preset="ai"><div class="pi2 pi-ai"></div><span>AI Edit</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div id="rp">
+    <div id="rec">
+      <div class="rrow">
+        <span class="rdot">●</span>
+        <div style="flex:1">
+          <div class="rts">REC <span id="rt">2026-03-03 00:00:00Z</span></div>
+          <div class="rorb">ORB: 47439 PASS: DESC-179</div>
+        </div>
+        <button class="ibtn t" id="movb">MOVE</button>
+      </div>
+    </div>
+
+    <div class="ppb">
+      <div class="pph"><span class="ppic">✦</span><span class="ppl">BLOOM</span><button class="ibtn t" id="blr">RESET</button></div>
+      <div class="psr"><input type="range" class="hs" id="sbl" min="0" max="200" value="100"><span class="sv" id="vbl">100%</span></div>
+    </div>
+
+    <div class="ppb">
+      <div class="pph"><span class="ppic">◎</span><span class="ppl">SHARPEN</span></div>
+      <div class="psr"><input type="range" class="hs" id="ssh" min="0" max="200" value="56"><span class="sv" id="vsh">56%</span></div>
+    </div>
+
+    <div class="ppb">
+      <div class="pphb"><span class="ppl">HUD</span></div>
+      <div class="pr2"><span class="pps">LAYOUT</span><select class="hsel" id="slay"><option>Tactical</option><option>Minimal</option><option>Full</option><option>Ghost</option></select></div>
+    </div>
+
+    <div class="ppb">
+      <div class="pphb pon"><span class="pled"></span><span class="ppl">PANOPTIC</span></div>
+      <div class="pr2" style="margin-top:4px"><span class="pps">DENSITY</span><input type="range" class="hs fg" id="spn" min="0" max="100" value="6"><span class="sv" id="vpn">6%</span></div>
+    </div>
+
+    <div class="pbr">
+      <button class="hbtn" id="bdet">DETECT</button>
+      <button class="hbtn" id="bcln">CLEAN UI</button>
+    </div>
+
+    <div class="ppb">
+      <div class="pph"><span class="ppl">PARAMETERS</span><button class="ibtn t" id="prmin">−</button></div>
+      <div id="prbody">
+        <div class="pir"><span class="pps">Pixelation</span><input type="range" class="hs fg" id="spx" min="0" max="100" value="5"></div>
+        <div class="pir"><span class="pps">Distortion</span><input type="range" class="hs fg" id="sds" min="0" max="100" value="40"></div>
+        <div class="pir"><span class="pps">Instability</span><input type="range" class="hs fg" id="sin" min="0" max="100" value="30"></div>
+      </div>
+    </div>
+
+    <div id="telem">
+      <div class="tr2"><span class="tl2">GSD:</span><span class="tv2 ac" id="tgsd">0.23M</span><span class="tl2">NIIRS:</span><span class="tv2 ac" id="tni">7.1</span></div>
+      <div class="tr2"><span class="tl2">ALT:</span><span class="tv2" id="talt">611M</span><span class="tl2">SUN:</span><span class="tv2" id="tsun">-40.4° EL</span></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
