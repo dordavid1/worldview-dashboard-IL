@@ -1,21 +1,17 @@
 /*
   WorldView V2 — Free & Legal Edition (Static hosting + optional Cloudflare Worker)
 
-  Goals:
-  - Cesium globe in circular viewport
-  - Tactical HUD UI + style presets (CRT/NVG/FLIR/Noir/Snow/Anime)
-  - Layers: flights (OpenSky via worker), satellites (CelesTrak), earthquakes (USGS), weather radar (RainViewer tiles), traffic glow (sim), CCTV quad projection (user-provided permitted URL)
-  - 2D map panel (MapLibre) mirrors camera center
-
-  IMPORTANT:
-  - For OpenSky, browsers often hit CORS/rate limits. Use the provided Worker for best results.
-  - CCTV projection is only for permitted sources you have rights to use.
+  Fixes included:
+  - Cesium static hosting fix handled in index.html via CESIUM_BASE_URL
+  - Force FREE globe imagery (OSM) so you never get a black globe from Ion/Bing
+  - If Worker base URL is not set:
+      - Earthquakes + Satellites load directly from public endpoints
+      - Flights will try same-origin /api/flights (optional)
 */
 
 (function () {
   const LS_WORKER = 'worldview.workerBase';
 
-  /** @type {import('cesium').Viewer | any} */
   let viewer;
 
   const state = {
@@ -40,7 +36,6 @@
     },
   };
 
-  // --- UI helpers ---
   const $ = (id) => document.getElementById(id);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
@@ -55,27 +50,32 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
 
-  // --- Networking ---
+  function hasWorker() {
+    const b = (state.workerBase || '').trim();
+    return b.startsWith('http');
+  }
+
   function apiUrl(path, params) {
-    // Prefer worker base if provided, else same-origin.
     const base = (state.workerBase || '').replace(/\/$/, '');
+
+    // If no worker: use public endpoints for quakes/sats; keep flights as /api/flights (optional)
+    if (!hasWorker()) {
+      if (path === '/api/earthquakes') return 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson';
+      if (path === '/api/satellites') return 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json';
+      // flights without worker often fails due CORS; still return same-origin endpoint
+      const u0 = new URL(path, window.location.origin);
+      if (params) for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') u0.searchParams.set(k, String(v));
+      return u0.toString();
+    }
+
     const url = new URL((base ? base : '') + path, window.location.origin);
-    if (base) {
-      // If base is full URL, rebuild accordingly
-      try {
-        const u = new URL(base);
-        url.protocol = u.protocol;
-        url.host = u.host;
-        url.pathname = u.pathname.replace(/\/$/, '') + path;
-      } catch {
-        // ignore
-      }
-    }
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
-      }
-    }
+    try {
+      const u = new URL(base);
+      url.protocol = u.protocol;
+      url.host = u.host;
+      url.pathname = u.pathname.replace(/\/$/, '') + path;
+    } catch {}
+    if (params) for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     return url.toString();
   }
 
@@ -85,7 +85,6 @@
     return await r.json();
   }
 
-  // --- Cesium layers ---
   const layers = {
     flights: null,
     sats: null,
@@ -105,20 +104,35 @@
     },
   };
 
+  function forceFreeGlobe() {
+    try {
+      if (!viewer) return;
+      const il = viewer.imageryLayers;
+      while (il.length > 0) il.remove(il.get(0), true);
+      il.addImageryProvider(new Cesium.OpenStreetMapImageryProvider({
+        url: "https://a.tile.openstreetmap.org/"
+      }));
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      viewer.scene.globe.show = true;
+      viewer.scene.globe.enableLighting = true;
+      viewer.scene.globe.baseColor = Cesium.Color.BLACK;
+    } catch (e) {
+      console.warn('forceFreeGlobe failed', e);
+    }
+  }
+
   async function updateFlights() {
     if (!state.layers.flights) {
       layers.flights.entities.removeAll();
       return;
     }
 
-    // Start with global view; you can add bounding box later based on camera.
     const url = apiUrl('/api/flights', { extended: 1 });
     try {
       const json = await safeJson(url);
       const statesArr = json.states || [];
       layers.flights.entities.removeAll();
 
-      // Performance guard
       const limit = 900;
       const list = statesArr.slice(0, limit);
 
@@ -139,25 +153,17 @@
           },
           label: {
             text: labelText,
-            font: '10px ' + 'sans-serif',
+            font: '10px sans-serif',
             fillColor: Cesium.Color.WHITE,
             pixelOffset: new Cesium.Cartesian2(0, -12),
             showBackground: false,
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 1.4e6),
           },
-          properties: {
-            type: 'flight',
-            icao24,
-            callsign: labelText,
-            originCountry,
-            velocity,
-            heading,
-            lastContact,
-          },
+          properties: { type: 'flight', icao24, callsign: labelText, originCountry, velocity, heading, lastContact },
         });
       }
     } catch (e) {
-      console.warn('Flights fetch failed. Tip: set Worker Base URL for OpenSky.', e);
+      console.warn('Flights fetch failed (expected without worker).', e);
     }
   }
 
@@ -188,7 +194,7 @@
           },
           label: {
             text: mag.toFixed(1),
-            font: '10px ' + 'sans-serif',
+            font: '10px sans-serif',
             fillColor: Cesium.Color.WHITE,
             pixelOffset: new Cesium.Cartesian2(0, -12),
             showBackground: false,
@@ -214,7 +220,7 @@
       layers.sats.entities.removeAll();
 
       const now = new Date();
-      const limit = 350; // performance guard
+      const limit = 350;
       for (const sat of sats.slice(0, limit)) {
         const line1 = sat.line1 || sat.TLE_LINE1;
         const line2 = sat.line2 || sat.TLE_LINE2;
@@ -241,7 +247,7 @@
             },
             label: {
               text: name ? `SAT-${sat.noradCatId || sat.NORAD_CAT_ID || ''}` : '',
-              font: '9px ' + 'sans-serif',
+              font: '9px sans-serif',
               fillColor: Cesium.Color.fromCssColorString('#7de3ff'),
               pixelOffset: new Cesium.Cartesian2(0, -10),
               showBackground: false,
@@ -249,16 +255,13 @@
             },
             properties: { type: 'sat', norad: sat.noradCatId || sat.NORAD_CAT_ID, name },
           });
-        } catch {
-          // ignore broken TLEs
-        }
+        } catch {}
       }
     } catch (e) {
       console.warn('Satellites fetch failed', e);
     }
   }
 
-  // Weather radar via RainViewer tiles (no key). We only show a recent frame.
   let weatherLayer;
   async function setWeatherEnabled(enabled) {
     if (!enabled) {
@@ -269,20 +272,14 @@
       return;
     }
 
-    // RainViewer gives a JSON listing frames
     try {
       const meta = await safeJson('https://api.rainviewer.com/public/weather-maps.json');
       const frames = meta?.radar?.past || [];
       const last = frames[frames.length - 1];
       if (!last) return;
-      const time = last.time;
-      const path = last.path;
-      const template = `https://tilecache.rainviewer.com${path}/256/{z}/{x}/{y}/2/1_1.png`;
+      const template = `https://tilecache.rainviewer.com${last.path}/256/{z}/{x}/{y}/2/1_1.png`;
 
-      const provider = new Cesium.UrlTemplateImageryProvider({
-        url: template,
-        credit: 'RainViewer',
-      });
+      const provider = new Cesium.UrlTemplateImageryProvider({ url: template, credit: 'RainViewer' });
       weatherLayer = viewer.imageryLayers.addImageryProvider(provider);
       weatherLayer.alpha = 0.55;
     } catch (e) {
@@ -290,7 +287,6 @@
     }
   }
 
-  // Traffic Glow (simulated): animated points near camera center
   let trafficTimer;
   function setTrafficEnabled(enabled) {
     if (!enabled) {
@@ -311,10 +307,7 @@
         const lat = centerLat + (Math.random() - 0.5) * 0.22;
         layers.traffic.entities.add({
           position: Cesium.Cartesian3.fromDegrees(lon, lat, 0),
-          point: {
-            pixelSize: 2,
-            color: Cesium.Color.fromCssColorString('#ffd166').withAlpha(0.35),
-          },
+          point: { pixelSize: 2, color: Cesium.Color.fromCssColorString('#ffd166').withAlpha(0.35) },
           properties: { type: 'traffic' },
         });
       }
@@ -324,7 +317,6 @@
     trafficTimer = setInterval(seedPoints, 8000);
   }
 
-  // CCTV projection (simple ground quad)
   let cctvEntity;
   function clearCctv() {
     if (cctvEntity) {
@@ -345,11 +337,9 @@
 
     clearCctv();
 
-    // Use a rectangle around the point. Calibration sliders can be added later.
-    const halfSizeDeg = 0.0012; // ~130m
+    const halfSizeDeg = 0.0012;
     const rect = Cesium.Rectangle.fromDegrees(lon - halfSizeDeg, lat - halfSizeDeg, lon + halfSizeDeg, lat + halfSizeDeg);
 
-    // Cesium material for video requires creating HTMLVideoElement
     const video = document.createElement('video');
     video.src = url;
     video.crossOrigin = 'anonymous';
@@ -358,22 +348,13 @@
     video.playsInline = true;
     video.autoplay = true;
 
-    try {
-      await video.play();
-    } catch {
-      // User gesture might be required; still proceed.
-    }
+    try { await video.play(); } catch {}
 
     cctvEntity = layers.cctv.entities.add({
-      rectangle: {
-        coordinates: rect,
-        material: video,
-        height: 0,
-      },
+      rectangle: { coordinates: rect, material: video, height: 0 },
       properties: { type: 'cctv', url },
     });
 
-    // Fly to
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(lon, lat, 900),
       orientation: { heading: 0.0, pitch: Cesium.Math.toRadians(-45), roll: 0 },
@@ -381,14 +362,7 @@
     });
   }
 
-  // --- Post FX / Styles ---
-  let stages = {
-    bloom: null,
-    sharpen: null,
-    noise: null,
-    style: null,
-    pixel: null,
-  };
+  let stages = { bloom: null, sharpen: null, noise: null, style: null, pixel: null };
 
   function resetPostFx() {
     const pps = viewer.scene.postProcessStages;
@@ -397,7 +371,6 @@
   }
 
   function addBloom(v) {
-    // Cesium's built-in bloom stage
     const s = Cesium.PostProcessStageLibrary.createBloomStage();
     s.enabled = v > 0;
     s.uniforms.glowOnly = false;
@@ -436,10 +409,7 @@
         gl_FragColor = c - edge * amount;
       }
     `;
-    const st = new Cesium.PostProcessStage({
-      fragmentShader: fs,
-      uniforms: { amount: v },
-    });
+    const st = new Cesium.PostProcessStage({ fragmentShader: fs, uniforms: { amount: v } });
     viewer.scene.postProcessStages.add(st);
     stages.sharpen = st;
     applySharpen(v);
@@ -466,10 +436,7 @@
         gl_FragColor = c;
       }
     `;
-    const st = new Cesium.PostProcessStage({
-      fragmentShader: fs,
-      uniforms: { amount: v },
-    });
+    const st = new Cesium.PostProcessStage({ fragmentShader: fs, uniforms: { amount: v } });
     viewer.scene.postProcessStages.add(st);
     stages.noise = st;
     applyNoise(v);
@@ -493,10 +460,7 @@
         gl_FragColor = texture2D(colorTexture, q);
       }
     `;
-    const st = new Cesium.PostProcessStage({
-      fragmentShader: fs,
-      uniforms: { amount: v },
-    });
+    const st = new Cesium.PostProcessStage({ fragmentShader: fs, uniforms: { amount: v } });
     viewer.scene.postProcessStages.add(st);
     stages.pixel = st;
     applyPixelation(v);
@@ -519,16 +483,13 @@
         void main(){
           vec2 uv = v_textureCoordinates;
           vec4 c = texture2D(colorTexture, uv);
-          // subtle chromatic shift
           float shift = 0.0012 * intensity;
           float r = texture2D(colorTexture, uv + vec2(shift,0.0)).r;
           float b = texture2D(colorTexture, uv - vec2(shift,0.0)).b;
           c.rgb = vec3(r, c.g, b);
-          // vignette
           vec2 p = uv - 0.5;
           float v = smoothstep(0.65, 0.10, dot(p,p));
           c.rgb *= mix(0.65, 1.0, v);
-          // saturation
           float g = (c.r + c.g + c.b)/3.0;
           c.rgb = mix(vec3(g), c.rgb, 1.0 + saturation);
           gl_FragColor = c;
@@ -552,7 +513,6 @@
         varying vec2 v_textureCoordinates;
         uniform float intensity;
         uniform float saturation;
-        // simple thermal ramp
         vec3 ramp(float t){
           t = clamp(t, 0.0, 1.0);
           vec3 a = vec3(0.05,0.05,0.08);
@@ -569,7 +529,6 @@
           l = smoothstep(0.05, 0.95, l);
           l = mix(l, pow(l, 0.55), intensity);
           vec3 col = ramp(l);
-          // optional extra saturation
           float g = (col.r + col.g + col.b)/3.0;
           col = mix(vec3(g), col, 1.0 + saturation);
           gl_FragColor = vec4(col, c0.a);
@@ -595,7 +554,6 @@
         void main(){
           vec4 c = texture2D(colorTexture, v_textureCoordinates);
           float g = dot(c.rgb, vec3(0.299,0.587,0.114));
-          // cool tint
           c.rgb = mix(c.rgb, vec3(g)*vec3(0.85,0.95,1.0), 0.65);
           float r = rand(v_textureCoordinates*vec2(1200.0,800.0));
           c.rgb += (r-0.5)*0.06*intensity;
@@ -608,7 +566,6 @@
         uniform float intensity;
         void main(){
           vec4 c = texture2D(colorTexture, v_textureCoordinates);
-          // posterize
           float levels = mix(10.0, 4.0, intensity);
           c.rgb = floor(c.rgb * levels)/levels;
           gl_FragColor = c;
@@ -616,17 +573,11 @@
       `,
     };
 
-    if (!fs[style]) {
-      stages.style = null;
-      return;
-    }
+    if (!fs[style]) { stages.style = null; return; }
 
     const st = new Cesium.PostProcessStage({
       fragmentShader: fs[style],
-      uniforms: {
-        intensity: state.fx.intensity,
-        saturation: state.fx.saturation,
-      },
+      uniforms: { intensity: state.fx.intensity, saturation: state.fx.saturation },
     });
     viewer.scene.postProcessStages.add(st);
     stages.style = st;
@@ -635,30 +586,21 @@
   function applyStyle(style) {
     state.style = style;
     $('activeStyle').textContent = `STYLE: ${style}`;
-
-    // Visual CRT overlay
-    const crtOverlay = $('crtOverlay');
-    crtOverlay.classList.toggle('on', style === 'CRT');
+    $('crtOverlay').classList.toggle('on', style === 'CRT');
 
     resetPostFx();
-
-    // Build chain: bloom -> sharpen -> pixel -> style -> noise
     addBloom(state.fx.bloom);
     addSharpen(state.fx.sharpen);
     addPixelation(state.fx.pixelation);
     addStyleStage(style);
     addNoise(state.fx.noise);
 
-    // Tune uniforms
-    if (stages.style) {
-      if (stages.style.uniforms && 'intensity' in stages.style.uniforms) stages.style.uniforms.intensity = state.fx.intensity;
-      if (stages.style.uniforms && 'saturation' in stages.style.uniforms) stages.style.uniforms.saturation = state.fx.saturation;
+    if (stages.style?.uniforms) {
+      if ('intensity' in stages.style.uniforms) stages.style.uniforms.intensity = state.fx.intensity;
+      if ('saturation' in stages.style.uniforms) stages.style.uniforms.saturation = state.fx.saturation;
     }
 
-    // Button active state
-    $$('#bottomBar [data-style]').forEach((b) => {
-      b.classList.toggle('active', b.dataset.style === style);
-    });
+    $$('#bottomBar [data-style]').forEach((b) => b.classList.toggle('active', b.dataset.style === style));
   }
 
   function applyFxFromUi() {
@@ -682,18 +624,16 @@
     applySharpen(sharpen);
     applyNoise(noise);
     applyPixelation(pix);
-    if (stages.style && stages.style.uniforms) {
+    if (stages.style?.uniforms) {
       if ('intensity' in stages.style.uniforms) stages.style.uniforms.intensity = intensity;
       if ('saturation' in stages.style.uniforms) stages.style.uniforms.saturation = sat;
     }
   }
 
-  // --- 2D Map ---
   let map2d;
   function init2dMap() {
     const el = $('miniMapWrap');
-    if (!el) return;
-    if (map2d) return;
+    if (!el || map2d) return;
 
     map2d = new maplibregl.Map({
       container: 'miniMap',
@@ -714,19 +654,16 @@
       attributionControl: false,
     });
 
-    // Sync map center to Cesium camera
     const sync = () => {
       if (!map2d) return;
       const c = viewer.camera.positionCartographic;
       const lon = Cesium.Math.toDegrees(c.longitude);
       const lat = Cesium.Math.toDegrees(c.latitude);
-      const zoom = Math.max(1.2, Math.min(18, 2 + viewer.camera.getMagnitude() / 4e6));
       map2d.jumpTo({ center: [lon, lat], zoom: 3.5 });
     };
 
     viewer.camera.changed.addEventListener(() => {
       if (!map2d) return;
-      // throttle
       if (sync._t) return;
       sync._t = setTimeout(() => { sync._t = null; sync(); }, 300);
     });
@@ -739,18 +676,12 @@
     if (on) init2dMap();
   }
 
-  // --- Refresh loop ---
   async function refreshAll() {
     if (state.mode !== 'LIVE') return;
-    await Promise.all([
-      updateFlights(),
-      updateSats(),
-      updateQuakes(),
-    ]);
+    await Promise.all([updateFlights(), updateSats(), updateQuakes()]);
     setBadge('entityCount', entityRegistry.count());
   }
 
-  // FPS meter
   function initTelemetry() {
     let last = performance.now();
     let frames = 0;
@@ -769,35 +700,34 @@
     requestAnimationFrame(tick);
   }
 
-  // --- Boot ---
   window.addEventListener('load', () => {
     if (typeof Cesium === 'undefined') {
       alert('Cesium failed to load (check network).');
       return;
     }
 
-    // Viewer
     viewer = new Cesium.Viewer('viewer', {
       animation: false,
       timeline: false,
-      geocoder: true,
-      homeButton: true,
-      baseLayerPicker: true,
-      sceneModePicker: true,
+      geocoder: false,
+      homeButton: false,
+      baseLayerPicker: false,
+      sceneModePicker: false,
       navigationHelpButton: false,
-      fullscreenButton: true,
+      fullscreenButton: false,
       infoBox: true,
       selectionIndicator: true,
       shouldAnimate: true,
     });
 
-    viewer.scene.globe.baseColor = Cesium.Color.BLACK;
+    // Force free imagery (no Ion/Bing black globe)
+    forceFreeGlobe();
+
     viewer.scene.fog.enabled = true;
     viewer.scene.fog.density = 0.00015;
     viewer.scene.skyAtmosphere.hueShift = -0.05;
     viewer.scene.skyAtmosphere.saturationShift = -0.15;
 
-    // DataSources
     layers.flights = new Cesium.CustomDataSource('flights');
     layers.sats = new Cesium.CustomDataSource('satellites');
     layers.quakes = new Cesium.CustomDataSource('earthquakes');
@@ -810,14 +740,12 @@
     viewer.dataSources.add(layers.traffic);
     viewer.dataSources.add(layers.cctv);
 
-    // Start camera
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(-97.7431, 30.2672, 6000),
       orientation: { heading: 0.0, pitch: Cesium.Math.toRadians(-35), roll: 0.0 },
       duration: 0.0,
     });
 
-    // UI initial
     $('workerBase').value = state.workerBase;
     $('layerFlights').checked = state.layers.flights;
     $('layerSats').checked = state.layers.sats;
@@ -826,7 +754,6 @@
     $('layerTraffic').checked = state.layers.traffic;
     $('layerCctv').checked = state.layers.cctv;
 
-    // Wire layer toggles
     $('layerFlights').addEventListener('change', (e) => { state.layers.flights = e.target.checked; refreshAll(); });
     $('layerSats').addEventListener('change', (e) => { state.layers.sats = e.target.checked; refreshAll(); });
     $('layerQuakes').addEventListener('change', (e) => { state.layers.quakes = e.target.checked; refreshAll(); });
@@ -836,12 +763,8 @@
 
     $('refreshBtn').addEventListener('click', () => refreshAll());
 
-    // Style preset buttons
-    $$('#bottomBar [data-style]').forEach((b) => {
-      b.addEventListener('click', () => applyStyle(b.dataset.style));
-    });
+    $$('#bottomBar [data-style]').forEach((b) => b.addEventListener('click', () => applyStyle(b.dataset.style)));
 
-    // Mode
     $('modeLive').addEventListener('click', () => {
       state.mode = 'LIVE';
       $('modeLive').classList.add('active');
@@ -853,16 +776,11 @@
       $('modeLive').classList.remove('active');
     });
 
-    // FX sliders
-    ['bloom','sharpen','noise','pixelation','intensity','saturation'].forEach((id) => {
-      $(id).addEventListener('input', applyFxFromUi);
-    });
+    ['bloom','sharpen','noise','pixelation','intensity','saturation'].forEach((id) => $(id).addEventListener('input', applyFxFromUi));
     applyFxFromUi();
 
-    // 2D map toggle
     $('toggleMap').addEventListener('click', toggle2dMap);
 
-    // Worker base save
     $('saveWorker').addEventListener('click', () => {
       const v = ($('workerBase').value || '').trim();
       state.workerBase = v;
@@ -870,23 +788,18 @@
       alert('Saved. Refresh for immediate effect.');
     });
 
-    // CCTV project
     $('cctvProject').addEventListener('click', () => {
       state.layers.cctv = true;
       $('layerCctv').checked = true;
       projectCctv();
     });
 
-    // Initial style
     applyStyle('NORMAL');
-
-    // Initial weather/traffic
     setWeatherEnabled(state.layers.weather);
     setTrafficEnabled(state.layers.traffic);
 
-    // Start loops
     initTelemetry();
     refreshAll();
-    setInterval(refreshAll, 15000); // refresh every 15s
+    setInterval(refreshAll, 15000);
   });
 })();
