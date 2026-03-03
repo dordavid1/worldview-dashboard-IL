@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WorldView — Stable Full HUD (Free & Legal)</title>
+  <title>WorldView — Free & Legal Edition</title>
 
   <!-- CesiumJS -->
-  <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
-  <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js" defer></script>
+  <link href="https://unpkg.com/cesium@1.115.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <script src="https://unpkg.com/cesium@1.115.0/Build/Cesium/Cesium.js" defer></script>
 
   <!-- Satellite.js for TLE propagation -->
   <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.1/dist/satellite.min.js" defer></script>
@@ -42,13 +42,13 @@
       font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
     }
 
-    /* Subtle noise */
+    /* subtle global noise */
     .noise::before{
       content:"";
       position:fixed; inset:0;
       background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/></filter><rect width="120" height="120" filter="url(%23n)" opacity="0.12"/></svg>');
       mix-blend-mode: overlay;
-      opacity:.25;
+      opacity:.18;
       pointer-events:none;
       z-index:4;
     }
@@ -77,60 +77,70 @@
     }
 
     #viewer{position:absolute; inset:0;}
+    /* Cesium canvas tuning (no WebGL custom shaders) */
+    #viewport canvas{
+      filter: brightness(var(--fx-bright,1)) contrast(var(--fx-contrast,1)) saturate(var(--fx-sat,1));
+    }
 
-    /* overlays */
-    #scanlines, #grain, #vignette, #tint{
+    /* CRT / NVG / FLIR / NOIR / SNOW / ANIME overlays */
+    #styleOverlay{
       position:absolute; inset:0;
       pointer-events:none;
       z-index:3;
       opacity:0;
-      transition: opacity .15s ease, filter .15s ease;
+      transition:opacity .15s ease;
     }
+    body.style-crt #styleOverlay{opacity:.75;}
+    body.style-nvg #styleOverlay{opacity:.55;}
+    body.style-flir #styleOverlay{opacity:.40;}
+    body.style-noir #styleOverlay{opacity:.25;}
+    body.style-snow #styleOverlay{opacity:.35;}
+    body.style-anime #styleOverlay{opacity:.18;}
 
-    #scanlines{
+    /* Scanlines */
+    #styleOverlay::before{
+      content:"";
+      position:absolute; inset:0;
       background: repeating-linear-gradient(
         to bottom,
-        rgba(255,255,255,0.06),
-        rgba(255,255,255,0.06) 2px,
+        rgba(255,255,255,0.05),
+        rgba(255,255,255,0.05) 2px,
         rgba(0,0,0,0) 2px,
         rgba(0,0,0,0) 5px
       );
       mix-blend-mode:overlay;
+      opacity:.9;
     }
 
-    #grain{
-      background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/></filter><rect width="160" height="160" filter="url(%23n)" opacity="0.12"/></svg>');
+    /* tint/vignette */
+    #styleOverlay::after{
+      content:"";
+      position:absolute; inset:-20%;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(255,255,255,.08) 0%, rgba(0,0,0,0) 52%),
+        radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 42%, rgba(0,0,0,.72) 80%);
+      opacity:1;
+      filter: blur(0.2px);
+    }
+
+    /* Per-style color tint */
+    body.style-crt #viewport canvas{ filter: brightness(var(--fx-bright,1)) contrast(calc(var(--fx-contrast,1) * 1.08)) saturate(calc(var(--fx-sat,1) * 0.9)) hue-rotate(2deg); }
+    body.style-nvg #viewport canvas{ filter: brightness(calc(var(--fx-bright,1) * 1.05)) contrast(calc(var(--fx-contrast,1) * 1.15)) saturate(0.15) hue-rotate(90deg); }
+    body.style-flir #viewport canvas{ filter: brightness(calc(var(--fx-bright,1) * 1.05)) contrast(calc(var(--fx-contrast,1) * 1.25)) saturate(1.1) hue-rotate(210deg); }
+    body.style-noir #viewport canvas{ filter: brightness(var(--fx-bright,1)) contrast(calc(var(--fx-contrast,1) * 1.15)) saturate(0.0); }
+    body.style-snow #viewport canvas{ filter: brightness(calc(var(--fx-bright,1) * 1.10)) contrast(calc(var(--fx-contrast,1) * 1.05)) saturate(0.85); }
+    body.style-anime #viewport canvas{ filter: brightness(var(--fx-bright,1)) contrast(calc(var(--fx-contrast,1) * 1.05)) saturate(calc(var(--fx-sat,1) * 1.25)); }
+
+    /* Noise layer controlled by slider */
+    #noiseOverlay{
+      position:absolute; inset:0;
+      pointer-events:none;
+      z-index:2;
+      opacity:0;
+      transition:opacity .1s ease;
+      background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/></filter><rect width="140" height="140" filter="url(%23n)" opacity="0.22"/></svg>');
       mix-blend-mode: overlay;
     }
-
-    #vignette{
-      background: radial-gradient(circle at 50% 45%, rgba(255,255,255,.06) 0%, rgba(0,0,0,0) 55%),
-                  radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 40%, rgba(0,0,0,.72) 80%);
-      opacity:1;
-    }
-
-    #tint{ background: transparent; mix-blend-mode: color; }
-
-    /* Style classes (CSS-based; no WebGL shaders => no crashes) */
-    #viewport.style-CRT  #scanlines{opacity:.75;}
-    #viewport.style-CRT  #grain{opacity:.35;}
-    #viewport.style-CRT  #vignette{opacity:1;}
-    #viewport.style-CRT  #tint{opacity:.10; background:#bfe8ff;}
-
-    #viewport.style-NVG  { filter: saturate(1.2) contrast(1.15) brightness(1.05); }
-    #viewport.style-NVG  #tint{opacity:.42; background:#00ff55;}
-    #viewport.style-NVG  #grain{opacity:.22;}
-    #viewport.style-NVG  #vignette{opacity:1;}
-
-    #viewport.style-FLIR { filter: saturate(1.25) contrast(1.22) brightness(1.06) hue-rotate(35deg); }
-    #viewport.style-FLIR #tint{opacity:.18; background:#ffd17a;}
-    #viewport.style-FLIR #grain{opacity:.18;}
-    #viewport.style-FLIR #vignette{opacity:1;}
-
-    #viewport.style-NOIR { filter: grayscale(1) contrast(1.2) brightness(1.05); }
-    #viewport.style-SNOW { filter: contrast(1.08) brightness(1.12) saturate(0.9); }
-    #viewport.style-SNOW #tint{opacity:.12; background:#cfe6ff;}
-    #viewport.style-ANIME{ filter: saturate(1.45) contrast(1.25); }
 
     /* HUD panels */
     .panel{
@@ -151,7 +161,7 @@
 
     #rightPanel{
       right:22px; top:120px;
-      width:300px;
+      width:320px;
       padding:14px;
     }
 
@@ -215,7 +225,6 @@
       padding:10px 12px;
       border-radius: 12px;
       cursor:pointer;
-      user-select:none;
     }
     .btn:hover{border-color: rgba(125,227,255,.28)}
     .btn.active{outline: 1px solid rgba(125,227,255,.45); box-shadow: 0 0 0 3px rgba(125,227,255,.1);}
@@ -231,10 +240,7 @@
 
     .divider{height:1px; background:rgba(125,227,255,.10); margin:12px 0;}
 
-    .slider{
-      width:100%;
-      accent-color: var(--accent);
-    }
+    .slider{ width:100%; accent-color: var(--accent); }
 
     #miniMapWrap{
       position:absolute;
@@ -263,7 +269,6 @@
     }
 
     .field{
-      margin-top:8px;
       width:100%;
       padding:10px;
       border-radius:12px;
@@ -272,8 +277,9 @@
       color:var(--text);
       font-family:var(--mono);
       font-size:12px;
-      box-sizing:border-box;
+      outline:none;
     }
+    select.field{appearance:none;}
 
     /* Responsive */
     @media (max-width: 980px){
@@ -287,7 +293,7 @@
   </style>
 </head>
 
-<body class="noise">
+<body class="noise style-normal">
   <div id="root">
     <div id="topHeader">
       <div class="brand">
@@ -301,12 +307,10 @@
     </div>
 
     <div id="viewportWrap">
-      <div id="viewport" class="style-NORMAL">
+      <div id="viewport">
         <div id="viewer"></div>
-        <div id="scanlines"></div>
-        <div id="grain"></div>
-        <div id="vignette"></div>
-        <div id="tint"></div>
+        <div id="noiseOverlay"></div>
+        <div id="styleOverlay"></div>
       </div>
     </div>
 
@@ -318,37 +322,25 @@
 
       <div class="divider"></div>
 
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="layerFlights" checked> <span class="label">Live Flights</span></label>
-      </div>
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="layerSats" checked> <span class="label">Satellites</span></label>
-      </div>
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="layerQuakes" checked> <span class="label">Earthquakes</span></label>
-      </div>
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="layerWeather"> <span class="label">Weather Radar</span></label>
-      </div>
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="layerTraffic"> <span class="label">Traffic Glow</span></label>
-      </div>
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="layerCctv"> <span class="label">CCTV Mesh (authorized)</span></label>
-      </div>
+      <div class="row"><label class="toggle"><input type="checkbox" id="layerFlights" checked> <span class="label">Live Flights</span></label></div>
+      <div class="row"><label class="toggle"><input type="checkbox" id="layerSats" checked> <span class="label">Satellites</span></label></div>
+      <div class="row"><label class="toggle"><input type="checkbox" id="layerQuakes" checked> <span class="label">Earthquakes</span></label></div>
+      <div class="row"><label class="toggle"><input type="checkbox" id="layerWeather"> <span class="label">Weather Radar</span></label></div>
+      <div class="row"><label class="toggle"><input type="checkbox" id="layerTraffic"> <span class="label">Traffic Glow</span></label></div>
+      <div class="row"><label class="toggle"><input type="checkbox" id="layerCctv"> <span class="label">CCTV Mesh (authorized)</span></label></div>
 
       <div class="divider"></div>
 
       <div class="label" style="margin-bottom:8px;">CCTV (optional)</div>
       <div class="small">Paste a permitted MP4/HLS URL, then set lat/lon. We project it onto the ground.</div>
       <div style="margin-top:10px; display:flex; gap:8px;">
-        <input id="cctvUrl" class="field" placeholder="https://…/camera.mp4" style="flex:1;margin-top:0;" />
+        <input id="cctvUrl" placeholder="https://…/camera.mp4" class="field" style="flex:1;" />
         <button class="btn" id="cctvProject">PROJECT</button>
       </div>
 
       <div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-        <input id="cctvLat" class="field" placeholder="lat" style="margin-top:0;" />
-        <input id="cctvLon" class="field" placeholder="lon" style="margin-top:0;" />
+        <input id="cctvLat" placeholder="lat" class="field" />
+        <input id="cctvLon" placeholder="lon" class="field" />
       </div>
 
       <div class="divider"></div>
@@ -360,51 +352,59 @@
 
     <div id="rightPanel" class="panel">
       <div class="row">
-        <div class="label">POST FX</div>
+        <div class="label">VISUAL</div>
         <button class="btn" id="toggleMap">2D MAP</button>
       </div>
+
+      <div class="divider"></div>
+
+      <div class="label" style="margin-bottom:8px;">Base Map</div>
+      <select id="imagerySel" class="field">
+        <option value="ESRI">ESRI Satellite (default)</option>
+        <option value="OSM">OpenStreetMap</option>
+      </select>
+
       <div class="divider"></div>
 
       <div class="row"><div class="label">Bloom</div><div class="badge" id="bloomVal">0.35</div></div>
       <input class="slider" id="bloom" type="range" min="0" max="1" step="0.01" value="0.35" />
 
-      <div class="row" style="margin-top:10px;"><div class="label">Sharpen (safe)</div><div class="badge" id="sharpenVal">0.20</div></div>
+      <div class="row" style="margin-top:10px;"><div class="label">Sharpen (contrast)</div><div class="badge" id="sharpenVal">0.20</div></div>
       <input class="slider" id="sharpen" type="range" min="0" max="1" step="0.01" value="0.20" />
 
-      <div class="row" style="margin-top:10px;"><div class="label">Noise (safe)</div><div class="badge" id="noiseVal">0.25</div></div>
+      <div class="row" style="margin-top:10px;"><div class="label">Noise</div><div class="badge" id="noiseVal">0.25</div></div>
       <input class="slider" id="noise" type="range" min="0" max="1" step="0.01" value="0.25" />
 
       <div class="divider"></div>
-      <div class="label">STYLE PARAMS</div>
-      <div class="small" style="margin-top:6px;">(CSS overlays — no WebGL shader)</div>
+      <div class="label">Style Params</div>
+      <div class="small" style="margin-top:6px;">(no WebGL custom shaders — stable)</div>
 
-      <div class="row" style="margin-top:10px;"><div class="label">Pixelation (safe)</div><div class="badge" id="pixVal">0.00</div></div>
+      <div class="row" style="margin-top:10px;"><div class="label">Pixelation (resolution)</div><div class="badge" id="pixVal">0.00</div></div>
       <input class="slider" id="pixelation" type="range" min="0" max="1" step="0.01" value="0" />
 
-      <div class="row" style="margin-top:10px;"><div class="label">Intensity</div><div class="badge" id="intVal">0.75</div></div>
+      <div class="row" style="margin-top:10px;"><div class="label">Intensity (brightness)</div><div class="badge" id="intVal">0.75</div></div>
       <input class="slider" id="intensity" type="range" min="0" max="1" step="0.01" value="0.75" />
 
       <div class="row" style="margin-top:10px;"><div class="label">Saturation</div><div class="badge" id="satVal">0.00</div></div>
-      <input class="slider" id="saturation" type="range" min="-1" max="1" step="0.01" value="0" />
+      <input class="slider" id="saturation" type="range" min="0" max="1" step="0.01" value="0" />
 
       <div class="divider"></div>
-      <div class="small">Worker base URL (optional):</div>
-      <input id="workerBase" class="field" placeholder="https://your-worker.workers.dev" />
-      <button class="btn" id="saveWorker" style="margin-top:10px; width:100%;">SAVE WORKER URL</button>
 
-      <div class="divider"></div>
       <div class="small">Cesium ion token (optional):</div>
-      <input id="ionToken" class="field" placeholder="Paste ion token here (stored locally)" />
-      <button class="btn" id="saveIon" style="margin-top:10px; width:100%;">SAVE ION TOKEN</button>
-      <div class="small" id="ionNote" style="margin-top:10px; opacity:.9;"></div>
+      <input id="ionToken" placeholder="paste ion token (optional)" class="field" style="margin-top:8px;" />
+      <button class="btn" id="saveToken" style="margin-top:10px; width:100%;">SAVE TOKEN</button>
+
+      <div class="divider"></div>
+
+      <div class="small">Worker base URL (optional, for flights CORS):</div>
+      <input id="workerBase" placeholder="https://your-worker.workers.dev" class="field" style="margin-top:8px;" />
+      <button class="btn" id="saveWorker" style="margin-top:10px; width:100%;">SAVE WORKER URL</button>
     </div>
 
-    <div id="miniMapWrap">
-      <div id="miniMap"></div>
-    </div>
+    <div id="miniMapWrap"><div id="miniMap"></div></div>
 
     <div id="bottomBar">
-      <div class="chip" id="styleBar">
+      <div class="chip">
         <button class="btn active" data-style="NORMAL">NORMAL</button>
         <button class="btn" data-style="CRT">CRT</button>
         <button class="btn" data-style="NVG">NVG</button>
