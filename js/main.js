@@ -1,20 +1,20 @@
 /*
-  WorldView — Stable Edition (NO custom fragment shaders)
-
-  Fix:
-  - Remove all custom PostProcess shaders that crash WebGL on some devices/browsers.
-  - Keep Cesium built-in Bloom only + CRT overlay via CSS.
-  - Force free globe: OSM imagery + Ellipsoid terrain (no Cesium ion token needed).
+  WorldView — v3 SAFE (no custom fragment shaders)
+  If you still see out_FragColor/czm_viewport errors after this, you're NOT running this file.
 */
 
 (function () {
+  console.log("WorldView main.js v3 SAFE loaded");
+
   const LS_WORKER = 'worldview.workerBase';
+  const LS_ION = 'worldview.ionToken';
   let viewer;
 
   const state = {
     style: 'NORMAL',
     mode: 'LIVE',
     workerBase: localStorage.getItem(LS_WORKER) || '',
+    ionToken: localStorage.getItem(LS_ION) || '',
     layers: { flights: true, sats: true, quakes: true, weather: false, traffic: false, cctv: false },
     fx: { bloom: 0.35, sharpen: 0.2, noise: 0.25, pixelation: 0, intensity: 0.75, saturation: 0 },
   };
@@ -28,7 +28,6 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
 
-  // --- Networking ---
   function apiUrl(path, params) {
     const base = (state.workerBase || '').replace(/\/$/, '');
     const url = new URL((base ? base : '') + path, window.location.origin);
@@ -50,7 +49,6 @@
     return await r.json();
   }
 
-  // --- Cesium data sources ---
   const layers = { flights: null, sats: null, quakes: null, traffic: null, cctv: null };
   const entityRegistry = {
     count() {
@@ -67,16 +65,12 @@
     if (!state.layers.flights) { layers.flights.entities.removeAll(); return; }
     try {
       const json = await safeJson(apiUrl('/api/flights', { extended: 1 }));
-      const statesArr = json.states || [];
       layers.flights.entities.removeAll();
-
-      for (const st of statesArr.slice(0, 900)) {
+      for (const st of (json.states || []).slice(0, 900)) {
         const [icao24, callsign, originCountry, , , lon, lat, baroAlt, , velocity, heading, , , geoAlt] = st;
         if (lat == null || lon == null) continue;
-
         const altM = (geoAlt != null ? geoAlt : (baroAlt != null ? baroAlt : 0));
         const labelText = (callsign || icao24 || '').trim();
-
         layers.flights.entities.add({
           position: Cesium.Cartesian3.fromDegrees(lon, lat, altM),
           point: { pixelSize: 4, color: Cesium.Color.fromCssColorString('#ffd166'), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
@@ -92,7 +86,7 @@
         });
       }
     } catch (e) {
-      console.warn('Flights fetch failed (set Worker base URL for OpenSky).', e);
+      console.warn('Flights fetch failed (worker base URL needed for OpenSky).', e);
     }
   }
 
@@ -101,13 +95,11 @@
     try {
       const json = await safeJson(apiUrl('/api/earthquakes'));
       layers.quakes.entities.removeAll();
-
       for (const f of (json.features || [])) {
         const coords = f.geometry?.coordinates;
         if (!coords || coords.length < 3) continue;
         const [lon, lat, depthKm] = coords;
         const mag = f.properties?.mag ?? 1.0;
-
         layers.quakes.entities.add({
           position: Cesium.Cartesian3.fromDegrees(lon, lat, -Math.abs(depthKm) * 1000),
           point: {
@@ -137,13 +129,11 @@
     try {
       const sats = await safeJson(apiUrl('/api/satellites', { group: 'active' }));
       layers.sats.entities.removeAll();
-
       const now = new Date();
       for (const sat of sats.slice(0, 350)) {
         const line1 = sat.line1 || sat.TLE_LINE1;
         const line2 = sat.line2 || sat.TLE_LINE2;
         if (!line1 || !line2) continue;
-
         try {
           const rec = satellite.twoline2satrec(line1, line2);
           const pv = satellite.propagate(rec, now);
@@ -153,7 +143,6 @@
           const lon = satellite.degreesLong(gd.longitude);
           const lat = satellite.degreesLat(gd.latitude);
           const alt = gd.height * 1000;
-
           layers.sats.entities.add({
             position: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
             point: { pixelSize: 3, color: Cesium.Color.fromCssColorString('#7de3ff'), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
@@ -166,7 +155,6 @@
     }
   }
 
-  // Weather radar via RainViewer tiles
   let weatherLayer;
   async function setWeatherEnabled(enabled) {
     if (!enabled) {
@@ -181,12 +169,9 @@
       const template = `https://tilecache.rainviewer.com${last.path}/256/{z}/{x}/{y}/2/1_1.png`;
       weatherLayer = viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({ url: template, credit: 'RainViewer' }));
       weatherLayer.alpha = 0.55;
-    } catch (e) {
-      console.warn('Weather radar failed', e);
-    }
+    } catch (e) { console.warn('Weather radar failed', e); }
   }
 
-  // Traffic Glow (simulated)
   let trafficTimer;
   function setTrafficEnabled(enabled) {
     if (!enabled) {
@@ -195,13 +180,11 @@
       layers.traffic.entities.removeAll();
       return;
     }
-
     const seedPoints = () => {
       layers.traffic.entities.removeAll();
       const carto = viewer.camera.positionCartographic;
       const centerLon = Cesium.Math.toDegrees(carto.longitude);
       const centerLat = Cesium.Math.toDegrees(carto.latitude);
-
       for (let i = 0; i < 600; i++) {
         const lon = centerLon + (Math.random() - 0.5) * 0.28;
         const lat = centerLat + (Math.random() - 0.5) * 0.22;
@@ -212,12 +195,10 @@
         });
       }
     };
-
     seedPoints();
     trafficTimer = setInterval(seedPoints, 8000);
   }
 
-  // CCTV projection
   let cctvEntity;
   function clearCctv() { if (cctvEntity) { layers.cctv.entities.remove(cctvEntity); cctvEntity = null; } }
 
@@ -226,12 +207,9 @@
     const lat = parseFloat(($('cctvLat').value || '').trim());
     const lon = parseFloat(($('cctvLon').value || '').trim());
     if (!url || Number.isNaN(lat) || Number.isNaN(lon)) { alert('CCTV: please provide URL + lat/lon'); return; }
-
     clearCctv();
-
     const halfSizeDeg = 0.0012;
     const rect = Cesium.Rectangle.fromDegrees(lon - halfSizeDeg, lat - halfSizeDeg, lon + halfSizeDeg, lat + halfSizeDeg);
-
     const video = document.createElement('video');
     video.src = url;
     video.crossOrigin = 'anonymous';
@@ -240,22 +218,19 @@
     video.playsInline = true;
     video.autoplay = true;
     try { await video.play(); } catch {}
-
-    cctvEntity = layers.cctv.entities.add({
-      rectangle: { coordinates: rect, material: video, height: 0 },
-      properties: { type: 'cctv', url },
-    });
-
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(lon, lat, 900),
-      orientation: { heading: 0.0, pitch: Cesium.Math.toRadians(-45), roll: 0 },
-      duration: 1.4,
-    });
+    cctvEntity = layers.cctv.entities.add({ rectangle: { coordinates: rect, material: video, height: 0 }, properties: { type: 'cctv', url } });
+    viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat, 900), orientation: { heading: 0.0, pitch: Cesium.Math.toRadians(-45), roll: 0 }, duration: 1.4 });
   }
 
-  // --- Post FX (SAFE): Bloom only ---
+  // SAFE FX: Bloom only (Cesium builtin)
   let bloomStage = null;
-
+  function rebuildBloom() {
+    const pps = viewer.scene.postProcessStages;
+    pps.removeAll();
+    bloomStage = Cesium.PostProcessStageLibrary.createBloomStage();
+    pps.add(bloomStage);
+    applyBloom(state.fx.bloom);
+  }
   function applyBloom(v) {
     if (!bloomStage) return;
     bloomStage.enabled = v > 0.01;
@@ -263,23 +238,10 @@
     bloomStage.uniforms.sigma = Cesium.Math.lerp(1.2, 3.6, v);
   }
 
-  function rebuildPostFx() {
-    const pps = viewer.scene.postProcessStages;
-    pps.removeAll();
-
-    bloomStage = Cesium.PostProcessStageLibrary.createBloomStage();
-    pps.add(bloomStage);
-    applyBloom(state.fx.bloom);
-  }
-
   function applyStyle(style) {
     state.style = style;
     $('activeStyle').textContent = `STYLE: ${style}`;
     $('crtOverlay').classList.toggle('on', style === 'CRT');
-
-    // No custom shaders. Only Bloom exists.
-    rebuildPostFx();
-
     $$('#bottomBar [data-style]').forEach((b) => b.classList.toggle('active', b.dataset.style === style));
   }
 
@@ -290,25 +252,20 @@
     const pix = parseFloat($('pixelation').value);
     const intensity = parseFloat($('intensity').value);
     const sat = parseFloat($('saturation').value);
-
     state.fx = { ...state.fx, bloom, sharpen, noise, pixelation: pix, intensity, saturation: sat };
-
     setBadge('bloomVal', bloom.toFixed(2));
     setBadge('sharpenVal', sharpen.toFixed(2));
     setBadge('noiseVal', noise.toFixed(2));
     setBadge('pixVal', pix.toFixed(2));
     setBadge('intVal', intensity.toFixed(2));
     setBadge('satVal', sat.toFixed(2));
-
-    applyBloom(bloom); // only effect that actually changes rendering
+    applyBloom(bloom);
   }
 
-  // --- 2D Map ---
+  // 2D map
   let map2d;
   function init2dMap() {
-    const el = $('miniMapWrap');
-    if (!el || map2d) return;
-
+    if (map2d) return;
     map2d = new maplibregl.Map({
       container: 'miniMap',
       style: {
@@ -322,13 +279,11 @@
     });
 
     const sync = () => {
-      if (!map2d) return;
       const c = viewer.camera.positionCartographic;
       map2d.jumpTo({ center: [Cesium.Math.toDegrees(c.longitude), Cesium.Math.toDegrees(c.latitude)], zoom: 3.5 });
     };
 
     viewer.camera.changed.addEventListener(() => {
-      if (!map2d) return;
       if (sync._t) return;
       sync._t = setTimeout(() => { sync._t = null; sync(); }, 300);
     });
@@ -341,7 +296,6 @@
     if (on) init2dMap();
   }
 
-  // --- Refresh loop ---
   async function refreshAll() {
     if (state.mode !== 'LIVE') return;
     await Promise.all([updateFlights(), updateSats(), updateQuakes()]);
@@ -366,12 +320,11 @@
     requestAnimationFrame(tick);
   }
 
-  // --- Boot ---
   window.addEventListener('load', () => {
-    if (typeof Cesium === 'undefined') { alert('Cesium failed to load (check network).'); return; }
+    if (typeof Cesium === 'undefined') { alert('Cesium failed to load.'); return; }
 
-    // Avoid Ion usage (no token needed)
-    Cesium.Ion.defaultAccessToken = "";
+    // Apply Ion token ONLY if user saved one (not committed to repo)
+    if (state.ionToken) Cesium.Ion.defaultAccessToken = state.ionToken;
 
     viewer = new Cesium.Viewer('viewer', {
       animation: false,
@@ -390,15 +343,12 @@
 
     viewer.scene.globe.enableLighting = true;
     viewer.scene.globe.baseColor = Cesium.Color.BLACK;
-    viewer.scene.fog.enabled = true;
-    viewer.scene.fog.density = 0.00015;
 
     layers.flights = new Cesium.CustomDataSource('flights');
     layers.sats = new Cesium.CustomDataSource('satellites');
     layers.quakes = new Cesium.CustomDataSource('earthquakes');
     layers.traffic = new Cesium.CustomDataSource('traffic');
     layers.cctv = new Cesium.CustomDataSource('cctv');
-
     viewer.dataSources.add(layers.flights);
     viewer.dataSources.add(layers.sats);
     viewer.dataSources.add(layers.quakes);
@@ -411,8 +361,10 @@
       duration: 0.0,
     });
 
-    // UI initial
+    // UI init
     $('workerBase').value = state.workerBase;
+    $('ionToken').value = state.ionToken;
+
     $('layerFlights').checked = state.layers.flights;
     $('layerSats').checked = state.layers.sats;
     $('layerQuakes').checked = state.layers.quakes;
@@ -420,7 +372,6 @@
     $('layerTraffic').checked = state.layers.traffic;
     $('layerCctv').checked = state.layers.cctv;
 
-    // Wire toggles
     $('layerFlights').addEventListener('change', (e) => { state.layers.flights = e.target.checked; refreshAll(); });
     $('layerSats').addEventListener('change', (e) => { state.layers.sats = e.target.checked; refreshAll(); });
     $('layerQuakes').addEventListener('change', (e) => { state.layers.quakes = e.target.checked; refreshAll(); });
@@ -429,6 +380,7 @@
     $('layerCctv').addEventListener('change', (e) => { state.layers.cctv = e.target.checked; if (!state.layers.cctv) clearCctv(); });
 
     $('refreshBtn').addEventListener('click', () => refreshAll());
+
     $$('#bottomBar [data-style]').forEach((b) => b.addEventListener('click', () => applyStyle(b.dataset.style)));
 
     $('modeLive').addEventListener('click', () => { state.mode = 'LIVE'; $('modeLive').classList.add('active'); $('modePause').classList.remove('active'); });
@@ -442,13 +394,19 @@
       const v = ($('workerBase').value || '').trim();
       state.workerBase = v;
       localStorage.setItem(LS_WORKER, v);
-      alert('Saved. Refresh for immediate effect.');
+      alert('Saved Worker URL. Refresh page.');
+    });
+
+    $('saveIon').addEventListener('click', () => {
+      const v = ($('ionToken').value || '').trim();
+      state.ionToken = v;
+      localStorage.setItem(LS_ION, v);
+      alert('Saved Ion token. Refresh page.');
     });
 
     $('cctvProject').addEventListener('click', () => { state.layers.cctv = true; $('layerCctv').checked = true; projectCctv(); });
 
-    // Build safe FX chain (Bloom only)
-    rebuildPostFx();
+    rebuildBloom();
     applyFxFromUi();
     applyStyle('NORMAL');
 
