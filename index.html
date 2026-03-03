@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WorldView – Free & Legal Edition</title>
+    <!-- CesiumJS -->
+    <link
+      href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css"
+      rel="stylesheet"
+    />
+    <script
+      src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"
+      defer
+    ></script>
+    <!-- Satellite.js for TLE propagation -->
+    <script
+      src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.1/dist/satellite.min.js"
+      defer
+    ></script>
+    <!-- TailwindCSS (via CDN) for quick styling) -->
+    <script src="https://cdn.tailwindcss.com" defer></script>
+    <style>
+      /* Basic layout – feel free to customise */
+      body {
+        margin: 0;
+        overflow: hidden;
+        font-family: sans-serif;
+      }
+      #app {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      #viewer {
+        flex: 1;
+      }
+      #controls {
+        position: absolute;
+        top: 0.5rem;
+        left: 0.5rem;
+        z-index: 10;
+        background: rgba(0, 0, 0, 0.6);
+        color: white;
+        padding: 0.5rem;
+        border-radius: 0.25rem;
+        max-width: 300px;
+        font-size: 0.875rem;
+      }
+      #styleBar {
+        position: absolute;
+        bottom: 1rem;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 0.5rem;
+        z-index: 10;
+      }
+      #styleBar button {
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        background: rgba(0, 0, 0, 0.5);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        cursor: pointer;
+      }
+      #styleBar button.active {
+        background: #2563eb;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewer"></div>
+      <div id="controls">
+        <h1 class="text-lg font-bold mb-2">WorldView – Free Edition</h1>
+        <div class="mb-2">
+          <label><input type="checkbox" id="flightsToggle" checked /> Flights</label><br />
+          <label><input type="checkbox" id="satsToggle" checked /> Satellites</label><br />
+          <label><input type="checkbox" id="quakesToggle" checked /> Earthquakes</label><br />
+        </div>
+        <div class="mb-2">
+          <button id="refreshBtn" class="bg-blue-600 text-white px-2 py-1 rounded">Refresh Now</button>
+        </div>
+        <div class="mb-2 text-sm">
+          <strong>Note:</strong> Data sources are public APIs with rate limits. For best performance, leave only the layers you care about enabled.
+        </div>
+      </div>
+      <div id="styleBar"></div>
+    </div>
+    <script src="js/main.js" defer></script>
+  </body>
+</html>
