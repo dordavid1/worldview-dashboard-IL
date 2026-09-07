@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WayinStudio — AI Video Clipper, Transcriber & Reframer</title>
+<meta name="description" content="Browser-native AI video studio: transcribe, summarize, auto-clip, search moments, caption and reframe long videos into share-ready shorts.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">W</div>
+    <div class="brand-txt">
+      <strong>WayinStudio</strong>
+      <span>AI video clipper &amp; moment engine</span>
+    </div>
+  </div>
+
+  <div class="topbar-mid">
+    <div class="proj" id="proj-name" title="Loaded media">No media loaded</div>
+    <div class="pill" id="engine-pill" title="Inference backend">engine: idle</div>
+  </div>
+
+  <div class="topbar-actions">
+    <button class="btn ghost" id="btn-import-transcript" title="Import an existing SRT / VTT / JSON transcript">Import transcript</button>
+    <button class="btn ghost" id="btn-demo" title="Load a built-in demo project — no download required">Demo project</button>
+    <button class="btn primary" id="btn-analyze" disabled>Analyze video</button>
+  </div>
+</header>
+
+<main class="workspace">
+
+  <!-- ─────────── LEFT RAIL ─────────── -->
+  <aside class="rail">
+    <section class="card">
+      <h3>Source</h3>
+      <div class="drop" id="drop">
+        <div class="drop-ico">⬆</div>
+        <p><strong>Drop a video or audio file</strong></p>
+        <p class="muted">mp4 · mov · webm · mkv · mp3 · wav · m4a</p>
+        <button class="btn small" id="btn-pick">Choose file</button>
+        <input type="file" id="file-input" accept="video/*,audio/*" hidden>
+      </div>
+      <div class="meta-grid" id="media-meta" hidden>
+        <div><span>Duration</span><b id="m-dur">—</b></div>
+        <div><span>Resolution</span><b id="m-res">—</b></div>
+        <div><span>Size</span><b id="m-size">—</b></div>
+        <div><span>Type</span><b id="m-type">—</b></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Transcription</h3>
+      <label class="field">
+        <span>Model</span>
+        <select id="sel-model">
+          <option value="tiny">Whisper tiny — fastest (~75 MB)</option>
+          <option value="base" selected>Whisper base — balanced (~145 MB)</option>
+          <option value="small">Whisper small — accurate (~480 MB)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Language</span>
+        <select id="sel-lang">
+          <option value="auto" selected>Auto detect</option>
+          <option value="en">English</option>
+          <option value="he">עברית / Hebrew</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="ru">Russian</option>
+          <option value="ar">Arabic</option>
+          <option value="hi">Hindi</option>
+          <option value="zh">Chinese</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="chk-translate"><span>Translate to English</span></label>
+      <p class="hint">Runs fully on-device with WebGPU (falls back to WASM). The model downloads once and is cached by the browser.</p>
+    </section>
+
+    <section class="card" id="pipeline-card">
+      <h3>Pipeline</h3>
+      <ol class="steps" id="steps">
+        <li data-step="decode"><i></i><span>Decode audio</span><em></em></li>
+        <li data-step="model"><i></i><span>Load model</span><em></em></li>
+        <li data-step="asr"><i></i><span>Transcribe</span><em></em></li>
+        <li data-step="nlp"><i></i><span>Summarize &amp; clip</span><em></em></li>
+      </ol>
+      <div class="progress"><div id="progress-bar"></div></div>
+      <p class="status" id="status-line">Idle — load a file to begin.</p>
+      <button class="btn ghost small full" id="btn-cancel" hidden>Cancel</button>
+    </section>
+
+    <section class="card">
+      <h3>Stats</h3>
+      <div class="meta-grid tight" id="stats">
+        <div><span>Segments</span><b id="s-seg">0</b></div>
+        <div><span>Words</span><b id="s-words">0</b></div>
+        <div><span>Speech</span><b id="s-speech">0%</b></div>
+        <div><span>Clips</span><b id="s-clips">0</b></div>
+      </div>
+    </section>
+  </aside>
+
+  <!-- ─────────── STAGE ─────────── -->
+  <section class="stage">
+    <div class="viewport" id="viewport">
+      <canvas id="stage-canvas"></canvas>
+      <video id="video" playsinline crossorigin="anonymous"></video>
+      <div class="viewport-empty" id="viewport-empty">
+        <div class="ve-ico">▶</div>
+        <p>Load a video to start — or open the <button class="linkbtn" id="btn-demo-2">demo project</button></p>
+      </div>
+      <div class="rec-badge" id="rec-badge" hidden>● REC</div>
+    </div>
+
+    <div class="transport">
+      <button class="tbtn" id="btn-back" title="Back 5s">«</button>
+      <button class="tbtn play" id="btn-play" title="Play / Pause (space)">▶</button>
+      <button class="tbtn" id="btn-fwd" title="Forward 5s">»</button>
+      <span class="time"><b id="t-cur">0:00</b> / <span id="t-dur">0:00</span></span>
+      <div class="spacer"></div>
+      <label class="mini">Ratio
+        <select id="sel-ratio">
+          <option value="source" selected>Source</option>
+          <option value="9:16">9:16 Vertical</option>
+          <option value="1:1">1:1 Square</option>
+          <option value="4:5">4:5 Portrait</option>
+          <option value="16:9">16:9 Wide</option>
+        </select>
+      </label>
+      <label class="mini">Focus <input type="range" id="rng-focus" min="0" max="100" value="50" title="Reframe focus point"></label>
+      <label class="mini">Speed
+        <select id="sel-speed"><option>0.5</option><option>1</option><option>1.25</option><option>1.5</option><option>2</option></select>
+      </label>
+      <label class="check inline"><input type="checkbox" id="chk-captions" checked><span>Captions</span></label>
+      <label class="check inline"><input type="checkbox" id="chk-loop"><span>Loop clip</span></label>
+    </div>
+
+    <div class="timeline-wrap">
+      <canvas id="timeline"></canvas>
+      <div class="tl-legend">
+        <span class="lg lg-speech">speech</span>
+        <span class="lg lg-clip">clip</span>
+        <span class="lg lg-hit">search hit</span>
+        <span class="lg lg-chap">chapter</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── RIGHT PANEL ─────────── -->
+  <aside class="panel">
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="transcript">Transcript</button>
+      <button class="tab" data-tab="search">Moments</button>
+      <button class="tab" data-tab="clips">Clips</button>
+      <button class="tab" data-tab="summary">Summary</button>
+      <button class="tab" data-tab="captions">Captions</button>
+      <button class="tab" data-tab="export">Export</button>
+    </nav>
+
+    <div class="tabpane active" data-pane="transcript">
+      <div class="pane-bar">
+        <input type="search" id="tr-filter" placeholder="Filter transcript…">
+        <label class="check inline"><input type="checkbox" id="chk-follow" checked><span>Follow</span></label>
+      </div>
+      <div class="scroll" id="transcript-list">
+        <div class="placeholder">No transcript yet. Analyze a video, import an SRT/VTT, or open the demo project.</div>
+      </div>
+    </div>
+
+    <div class="tabpane" data-pane="search">
+      <div class="pane-bar">
+        <input type="search" id="moment-q" placeholder="Ask for a moment — e.g. “pricing objection”">
+        <button class="btn small" id="btn-moment">Find</button>
+      </div>
+      <div class="chips" id="moment-chips"></div>
+      <div class="scroll" id="moment-list">
+        <div class="placeholder">Type a keyword or a question. Results are ranked across the whole transcript.</div>
+      </div>
+    </div>
+
+    <div class="tabpane" data-pane="clips">
+      <div class="pane-bar">
+        <label class="mini">Target
+          <select id="sel-cliplen">
+            <option value="15">~15s</option>
+            <option value="30" selected>~30s</option>
+            <option value="45">~45s</option>
+            <option value="60">~60s</option>
+          </select>
+        </label>
+        <label class="mini">Count <input type="number" id="num-clips" min="1" max="20" value="6"></label>
+        <button class="btn small" id="btn-reclip">Re-clip</button>
+      </div>
+      <div class="scroll" id="clip-list">
+        <div class="placeholder">Auto-clipping finds self-contained highlights using topic shifts, pacing and hook language.</div>
+      </div>
+    </div>
+
+    <div class="tabpane" data-pane="summary">
+      <div class="scroll" id="summary-pane">
+        <div class="placeholder">A one-paragraph overview plus a timestamped outline appears here after analysis.</div>
+      </div>
+    </div>
+
+    <div class="tabpane" data-pane="captions">
+      <div class="scroll pad">
+        <label class="field"><span>Template</span>
+          <select id="cap-template">
+            <option value="pop" selected>Bold Pop</option>
+            <option value="clean">Clean</option>
+            <option value="neon">Neon</option>
+            <option value="bar">Subtitle Bar</option>
+            <option value="ticker">Ticker</option>
+          </select>
+        </label>
+        <label class="field"><span>Position</span>
+          <select id="cap-pos"><option value="bottom" selected>Bottom</option><option value="center">Center</option><option value="top">Top</option></select>
+        </label>
+        <label class="field"><span>Size <b id="cap-size-v">6.0%</b></span>
+          <input type="range" id="cap-size" min="30" max="130" value="60">
+        </label>
+        <label class="field"><span>Words per line <b id="cap-wpl-v">4</b></span>
+          <input type="range" id="cap-wpl" min="1" max="10" value="4">
+        </label>
+        <label class="field"><span>Highlight colour</span>
+          <input type="color" id="cap-color" value="#ffd60a">
+        </label>
+        <label class="check"><input type="checkbox" id="cap-upper"><span>Uppercase</span></label>
+        <label class="check"><input type="checkbox" id="cap-karaoke" checked><span>Word-level highlight (karaoke)</span></label>
+        <label class="check"><input type="checkbox" id="cap-shadow" checked><span>Drop shadow</span></label>
+        <p class="hint">The preview is the render: whatever you see in the player is exactly what gets burned into an exported clip.</p>
+      </div>
+    </div>
+
+    <div class="tabpane" data-pane="export">
+      <div class="scroll pad">
+        <h4>Text</h4>
+        <div class="btn-grid">
+          <button class="btn small" data-export="srt">Subtitles .srt</button>
+          <button class="btn small" data-export="vtt">Subtitles .vtt</button>
+          <button class="btn small" data-export="txt">Transcript .txt</button>
+          <button class="btn small" data-export="json">Project .json</button>
+          <button class="btn small" data-export="md">Summary .md</button>
+          <button class="btn small" data-export="csv">Clips .csv</button>
+        </div>
+
+        <h4>Render clip</h4>
+        <label class="field"><span>Clip</span><select id="exp-clip"></select></label>
+        <div class="row2">
+          <label class="field"><span>Ratio</span>
+            <select id="exp-ratio">
+              <option value="current" selected>Match player</option>
+              <option value="9:16">9:16</option><option value="1:1">1:1</option>
+              <option value="4:5">4:5</option><option value="16:9">16:9</option><option value="source">Source</option>
+            </select>
+          </label>
+          <label class="field"><span>Height</span>
+            <select id="exp-height"><option>720</option><option selected>1080</option><option>1440</option></select>
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="exp-captions" checked><span>Burn in captions</span></label>
+        <button class="btn primary full" id="btn-render">Render &amp; download .webm</button>
+        <p class="hint">Rendering plays the clip once in real time while capturing canvas + audio, so a 30s clip takes ~30s.</p>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+<input type="file" id="transcript-input" accept=".srt,.vtt,.json,.txt" hidden>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
