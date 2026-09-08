@@ -25,6 +25,10 @@ export class Renderer {
     this.focus = .5;
     this.style = defaultCaptionStyle();
     this.showCaptions = true;
+    this.captionMode = 'original';   // 'original' | 'translated' | 'both'
+    this.translationLang = null;     // key into seg.tr
+    this.focusKeys = null;           // auto-reframe keyframes [{t, x}]
+    this.focusMode = 'manual';       // 'manual' | 'auto'
   }
 
   setSegments(s) { this.segments = s || []; }
@@ -63,7 +67,7 @@ export class Renderer {
       const vw = v.videoWidth, vh = v.videoHeight, ar = W / H;
       let sw = vw, sh = vw / ar;
       if (sh > vh) { sh = vh; sw = vh * ar; }
-      const sx = (vw - sw) * this.focus;
+      const sx = (vw - sw) * this.focusAt(time);
       const sy = (vh - sh) * .5;
       ctx.drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
     } else {
@@ -100,84 +104,132 @@ export class Renderer {
     ctx.restore();
   }
 
+  /** Crop centre for this instant: a held keyframe path in auto mode, the slider otherwise. */
+  focusAt(time) {
+    const keys = this.focusKeys;
+    if (this.focusMode !== 'auto' || !keys || !keys.length) return this.focus;
+    if (keys.length === 1 || time <= keys[0].t) return keys[0].x;
+    let i = keys.length - 1;
+    while (i > 0 && keys[i].t > time) i--;
+    const a = keys[i], b = keys[i + 1];
+    if (!b) return a.x;
+    // ease across a short window, then hold — a cut that glides, never a slow drift
+    const span = Math.min(.7, Math.max(.2, b.t - a.t));
+    const k = Math.max(0, Math.min(1, (time - (b.t - span)) / span));
+    return a.x + (b.x - a.x) * (k * k * (3 - 2 * k));
+  }
+
+  /** Words with timings for a caption line; translated text gets an even spread. */
+  _wordsFor(seg, text, words) {
+    if (words && words.length) return words;
+    const parts = String(text || '').split(/\s+/).filter(Boolean);
+    const d = (seg.end - seg.start) / Math.max(parts.length, 1);
+    return parts.map((w, i) => ({ w, start: seg.start + i * d, end: seg.start + (i + 1) * d }));
+  }
+
+  /** The lines to draw right now, given the original/translated/bilingual mode. */
+  _blocks(seg) {
+    const lang = this.translationLang;
+    const translated = lang && seg.tr && seg.tr[lang];
+    if (this.captionMode === 'translated' && translated) return [{ text: translated, words: null, scale: 1 }];
+    if (this.captionMode === 'both' && translated) return [
+      { text: translated, words: null, scale: 1 },
+      { text: seg.text, words: seg.words, scale: .62, dim: .72, karaoke: false }
+    ];
+    return [{ text: seg.text, words: seg.words, scale: 1 }];
+  }
+
   _captions(ctx, W, H, time) {
     const seg = this.segmentAt(time);
     if (!seg || !seg.text) return;
     const st = this.style;
     const tpl = TEMPLATES[st.template] || TEMPLATES.pop;
-    const fontSize = Math.round(H * (st.size / 1000));
-    const rtl = isRTL(seg.text);
-
-    const words = (seg.words && seg.words.length ? seg.words : seg.text.split(/\s+/).map((w, i, a) => {
-      const d = (seg.end - seg.start) / a.length;
-      return { w, start: seg.start + i * d, end: seg.start + (i + 1) * d };
-    })).map(w => ({ ...w, w: st.uppercase ? w.w.toUpperCase() : w.w }));
-
+    const base = Math.round(H * (st.size / 1000));
     const perLine = tpl.single ? 99 : Math.max(1, st.wordsPerLine);
-    // Show only the active window of words (a caption "page"), like short-form editors do.
-    let page = words;
-    if (!tpl.single) {
-      const idx = Math.max(0, words.findIndex(w => time >= w.start && time <= w.end + .12));
-      const active = idx < 0 ? 0 : idx;
-      const pageIdx = Math.floor(active / perLine);
-      page = words.slice(pageIdx * perLine, pageIdx * perLine + perLine);
+    const space = ' ';
+
+    // measure every block into laid-out lines first, so the stack can be centred as one
+    const laid = [];
+    for (const block of this._blocks(seg)) {
+      const fontSize = Math.max(10, Math.round(base * (block.scale || 1)));
+      ctx.font = `${tpl.weight} ${fontSize}px Inter, system-ui, sans-serif`;
+      const rtl = isRTL(block.text);
+
+      let words = this._wordsFor(seg, block.text, block.words)
+        .map(w => ({ ...w, w: st.uppercase ? String(w.w).toUpperCase() : String(w.w) }));
+      if (!words.length) continue;
+
+      if (!tpl.single) {                       // show one "page" of words at a time
+        let active = words.findIndex(w => time >= w.start && time <= w.end + .12);
+        if (active < 0) active = time > words.at(-1).end ? words.length - 1 : 0;
+        const page = Math.floor(active / perLine);
+        words = words.slice(page * perLine, page * perLine + perLine);
+      }
+
+      const spaceW = ctx.measureText(space).width;
+      const safe = W * .88;
+      const lines = [[]];
+      let lw = 0;
+      for (const wd of words) {
+        const width = ctx.measureText(wd.w).width;
+        if (lw + width > safe && lines.at(-1).length) { lines.push([]); lw = 0; }
+        lines.at(-1).push({ ...wd, width });
+        lw += width + spaceW;
+      }
+      laid.push({ lines, fontSize, spaceW, rtl, dim: block.dim || 1, karaoke: block.karaoke !== false && !!block.words });
     }
-    if (!page.length) return;
+    if (!laid.length) return;
 
-    ctx.font = `${tpl.weight} ${fontSize}px Inter, system-ui, sans-serif`;
-    ctx.textBaseline = 'alphabetic';
-    ctx.direction = rtl ? 'rtl' : 'ltr';
-
-    // wrap the page into lines that fit the safe area
-    const safe = W * .88;
-    const lines = [[]];
-    let lw = 0;
-    const space = ctx.measureText(' ').width;
-    for (const wd of page) {
-      const m = ctx.measureText(wd.w).width;
-      if (lw + m > safe && lines.at(-1).length) { lines.push([]); lw = 0; }
-      lines.at(-1).push({ ...wd, w: wd.w, width: m });
-      lw += m + space;
-    }
-
-    const lineH = fontSize * 1.22;
-    const blockH = lines.length * lineH;
+    const gap = base * .22;
+    const blockH = laid.reduce((a, b) => a + b.lines.length * b.fontSize * 1.22, 0) + gap * (laid.length - 1);
     let top;
     if (st.position === 'top') top = H * .10;
     else if (st.position === 'center') top = (H - blockH) / 2;
     else top = H - blockH - H * .10;
 
     if (tpl.box) {
-      const pad = fontSize * .38;
-      let boxW = tpl.fullBar ? W : Math.max(...lines.map(l => l.reduce((a, x) => a + x.width + space, 0))) + pad * 2;
-      const x = tpl.fullBar ? 0 : (W - boxW) / 2;
+      const pad = base * .38;
+      const widest = Math.max(...laid.flatMap(b => b.lines.map(l => l.reduce((a, x) => a + x.width + b.spaceW, 0))));
+      const boxW = tpl.fullBar ? W : widest + pad * 2;
       ctx.fillStyle = tpl.box;
-      roundRect(ctx, x, top - pad * .8, boxW, blockH + pad * 1.5, tpl.fullBar ? 0 : fontSize * .28);
+      roundRect(ctx, tpl.fullBar ? 0 : (W - boxW) / 2, top - pad * .8, boxW, blockH + pad * 1.5, tpl.fullBar ? 0 : base * .28);
       ctx.fill();
     }
 
-    lines.forEach((line, li) => {
-      const total = line.reduce((a, x) => a + x.width, 0) + space * (line.length - 1);
-      let x = (W - total) / 2;
-      const y = top + li * lineH + fontSize;
-      for (const wd of line) {
-        const active = st.karaoke && time >= wd.start - .02 && time <= wd.end + .12;
-        ctx.save();
-        if (st.shadow) { ctx.shadowColor = 'rgba(0,0,0,.75)'; ctx.shadowBlur = fontSize * .28; ctx.shadowOffsetY = fontSize * .05; }
-        if (tpl.glow) { ctx.shadowColor = active ? st.color : '#28e6ff'; ctx.shadowBlur = tpl.glow; }
-        if (tpl.stroke) {
-          ctx.lineWidth = fontSize * tpl.stroke;
-          ctx.strokeStyle = 'rgba(0,0,0,.9)';
-          ctx.lineJoin = 'round';
-          ctx.strokeText(wd.w, x, y);
+    let y = top;
+    ctx.textAlign = 'left';
+    ctx.direction = 'ltr';
+    for (const b of laid) {
+      ctx.font = `${tpl.weight} ${b.fontSize}px Inter, system-ui, sans-serif`;
+      for (const line of b.lines) {
+        const total = line.reduce((a, x) => a + x.width, 0) + b.spaceW * (line.length - 1);
+        let x = (W - total) / 2;
+        const baseline = y + b.fontSize;
+        // words are positioned one by one, so a right-to-left line is laid out
+        // in reverse: the first word of the sentence sits on the right
+        for (const wd of (b.rtl ? [...line].reverse() : line)) {
+          const active = st.karaoke && b.karaoke && time >= wd.start - .02 && time <= wd.end + .12;
+          ctx.save();
+          ctx.globalAlpha = b.dim;
+          if (st.shadow) { ctx.shadowColor = 'rgba(0,0,0,.75)'; ctx.shadowBlur = b.fontSize * .28; ctx.shadowOffsetY = b.fontSize * .05; }
+          if (tpl.glow) { ctx.shadowColor = active ? st.color : '#28e6ff'; ctx.shadowBlur = tpl.glow; }
+          if (tpl.stroke) {
+            ctx.lineWidth = b.fontSize * tpl.stroke;
+            ctx.strokeStyle = 'rgba(0,0,0,.9)';
+            ctx.lineJoin = 'round';
+            ctx.strokeText(wd.w, x, baseline);
+          }
+          ctx.fillStyle = active ? st.color : tpl.color;
+          ctx.fillText(wd.w, x, baseline);
+          ctx.restore();
+          x += wd.width + b.spaceW;
         }
-        ctx.fillStyle = active ? st.color : tpl.color;
-        ctx.fillText(wd.w, x, y);
-        ctx.restore();
-        x += wd.width + space;
+        y += b.fontSize * 1.22;
       }
-    });
+      y += gap;
+    }
   }
+
 }
 
 function roundRect(ctx, x, y, w, h, r) {

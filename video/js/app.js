@@ -2,7 +2,10 @@
 import { decodeAudio, peaks, speechRatio, fmtTime, fmtBytes } from './media.js';
 import { Transcriber } from './transcriber.js';
 import { Renderer, defaultCaptionStyle } from './renderer.js';
-import { summarize, autoClips, searchMoments, chapters, keywords, highlight, escapeHTML, isRTL } from './nlp.js';
+import { summarize, autoClips, searchMoments, chapters, keywords, highlight, escapeHTML, isRTL, detectLanguage } from './nlp.js';
+import { extractEmbeddedSubtitles, readTextTracks, cuesToSegments } from './subtitles.js';
+import { Translator, LANGUAGES, langName } from './translator.js';
+import { analyzeReframe } from './vision.js';
 import { demoProject, demoPeaks } from './demo.js';
 import * as X from './exporters.js';
 
@@ -17,6 +20,7 @@ const tctx = tl.getContext('2d');
 
 const renderer = new Renderer(video);
 const transcriber = new Transcriber();
+const translator = new Translator();
 
 const S = {
   file: null, url: null, name: '', duration: 0,
@@ -25,7 +29,8 @@ const S = {
   hits: [], query: '', activeClip: null,
   synthetic: false, busy: false,
   vtime: 0, vplaying: false, lastTick: 0,
-  loopClip: false, activeSegId: -1
+  loopClip: false, activeSegId: -1,
+  subTracks: [], detected: null, trLang: null, translating: false, framing: false
 };
 
 /* ── small helpers ───────────────────────────────────────────────────── */
@@ -102,6 +107,38 @@ async function loadFile(file) {
   sizeStage();
   paint();
   drawTimeline();
+  findEmbeddedSubtitles(file);
+}
+
+/** Videos often already carry subtitles; read them straight out of the container. */
+async function findEmbeddedSubtitles(file) {
+  $('#sub-found').hidden = true;
+  S.subTracks = [];
+  try {
+    const fromFile = await extractEmbeddedSubtitles(file);
+    const fromBrowser = readTextTracks(video);
+    S.subTracks = [...fromFile, ...fromBrowser].filter(t => t.cues?.length);
+  } catch (e) { console.warn(e); }
+  if (!S.subTracks.length) return;
+  const t = S.subTracks[0];
+  const lang = t.language && t.language !== 'und' ? ` · ${t.language}` : '';
+  $('#sub-found-txt').textContent =
+    `${S.subTracks.length} subtitle track${S.subTracks.length > 1 ? 's' : ''} inside this file — ${t.cues.length} cues${lang}. Use them instead of transcribing?`;
+  $('#sub-found').hidden = false;
+  status(`Found existing subtitles in ${file.name} — you can use them as the transcript and translate from there.`);
+}
+
+function useEmbeddedSubtitles() {
+  const t = S.subTracks[0];
+  if (!t) return;
+  S.segments = cuesToSegments(t.cues);
+  S.words = [];
+  ['decode', 'model', 'asr'].forEach(x => step(x, 'done', 'embedded'));
+  runNLP();
+  step('nlp', 'done', `${S.clips.length} clips`); progress(1);
+  $('#sub-found').hidden = true;
+  toast(`Loaded ${S.segments.length} cues from the video's own subtitles`, 'ok');
+  status(`Using the embedded ${t.codec} track — ${S.segments.length} cues. Translate them from the Translate tab.`);
 }
 
 function loadDemo() {
@@ -214,6 +251,9 @@ function runNLP() {
     target: +$('#sel-cliplen').value,
     count: +$('#num-clips').value
   });
+  S.detected = detectLanguage(S.segments.map(s => s.text).join(' '));
+  const auto = $('#tr-src').querySelector('option[value="auto"]');
+  if (auto) auto.textContent = `Auto detect — ${langName(S.detected.code)}`;
   renderAll();
   drawTimeline();
 }
@@ -225,6 +265,7 @@ function renderAll() {
   renderMoments();
   renderStats();
   fillClipSelect();
+  renderTranslations();
 }
 
 /* ── stats ───────────────────────────────────────────────────────────── */
@@ -343,6 +384,138 @@ function doSearch(q) {
   if (S.query) status(`${S.hits.length} moment${S.hits.length === 1 ? '' : 's'} for “${S.query}”.`);
 }
 
+/* ── translation ─────────────────────────────────────────────────────── */
+function fillLanguages() {
+  const src = $('#tr-src'), tgt = $('#tr-tgt');
+  const opts = LANGUAGES.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
+  src.insertAdjacentHTML('beforeend', opts);
+  tgt.innerHTML = opts;
+  tgt.value = 'en';
+}
+
+function renderTranslations() {
+  const box = $('#tr-list');
+  const lang = S.trLang;
+  if (!S.segments.length) { box.innerHTML = `<div class="placeholder">Transcribe, import or read in subtitles first — then translate them into any of ${LANGUAGES.length} languages.</div>`; return; }
+  if (!lang) { box.innerHTML = `<div class="placeholder">Pick a target language and press Translate. Captions can then show the translation, the original, or both at once.</div>`; return; }
+  box.innerHTML = S.segments.map(s => `
+    <div class="trrow" data-t="${s.start}">
+      <time>${fmtTime(s.start)}</time>
+      <div>
+        <div class="t ${s.tr?.[lang] ? '' : 'pending'}"${isRTL(s.tr?.[lang] || '') ? ' dir="rtl"' : ''}>${escapeHTML(s.tr?.[lang] || '…')}</div>
+        <div class="o"${isRTL(s.text) ? ' dir="rtl"' : ''}>${escapeHTML(s.text)}</div>
+      </div>
+    </div>`).join('');
+}
+
+function updateTranslationExports() {
+  const on = !!S.trLang && S.segments.some(s => s.tr?.[S.trLang]);
+  $('[data-export="srt-tr"]').disabled = !on;
+  $('[data-export="srt-bi"]').disabled = !on;
+}
+
+async function translateAll() {
+  if (!S.segments.length) { toast('Nothing to translate yet', 'err'); return; }
+  if (S.translating) return;
+  const tgt = $('#tr-tgt').value;
+  const model = $('#tr-model').value;
+  let src = $('#tr-src').value;
+  if (src === 'auto') src = (S.detected || detectLanguage(S.segments.map(x => x.text).join(' '))).code;
+  if (src === tgt) { toast('Source and target are the same language', 'err'); return; }
+
+  const pending = S.segments.filter(s => !s.tr?.[tgt]).map(s => ({ id: s.id, text: s.text, start: s.start }));
+  if (!pending.length) { toast('Already translated', 'ok'); return; }
+
+  S.translating = true;
+  S.trLang = tgt;
+  renderer.translationLang = tgt;
+  $('#btn-translate').disabled = true;
+  $('#btn-translate-cancel').disabled = false;
+  renderTranslations();
+  const byId = new Map(S.segments.map(s => [s.id, s]));
+  let firstLanded = false;
+
+  try {
+    await translator.run(pending, {
+      src, tgt, model,
+      priorityTime: $('#tr-live').checked ? now() : 0
+    }, ev => {
+      if (ev.kind === 'model') {
+        if (ev.stage === 'download') {
+          $('#tr-bar').style.width = Math.round(ev.progress * 100) + '%';
+          $('#tr-status').textContent = `Downloading translation engine — ${Math.round(ev.progress * 100)}%`;
+        } else if (ev.stage === 'loading') {
+          $('#tr-status').textContent = `Loading ${ev.model}…`;
+        } else if (ev.stage === 'ready') {
+          $('#tr-status').textContent = `Translating ${langName(src)} → ${langName(tgt)} on ${ev.device}…`;
+        }
+      } else if (ev.kind === 'batch') {
+        for (const r of ev.results) {
+          const seg = byId.get(r.id);
+          if (!seg || !r.text) continue;
+          (seg.tr ||= {})[tgt] = r.text;
+          const row = $(`#tr-list .trrow[data-t="${seg.start}"] .t`);
+          if (row) { row.textContent = r.text; row.classList.remove('pending'); row.dir = isRTL(r.text) ? 'rtl' : 'ltr'; }
+        }
+        $('#tr-bar').style.width = Math.round(ev.done / ev.total * 100) + '%';
+        $('#tr-status').textContent = `${ev.done} / ${ev.total} segments translated into ${langName(tgt)}.`;
+        if (!firstLanded) {
+          firstLanded = true;
+          if (renderer.captionMode === 'original') {
+            $('#cap-mode').value = 'translated';
+            renderer.captionMode = 'translated';
+            toast(`Captions switched to ${langName(tgt)}`, 'ok');
+          }
+          updateTranslationExports();
+        }
+        paint();
+      }
+    });
+    $('#tr-status').textContent = `Done — ${langName(src)} → ${langName(tgt)}. Captions and subtitle exports can use it now.`;
+    toast('Translation complete', 'ok');
+  } catch (err) {
+    if (err.cancelled) $('#tr-status').textContent = 'Stopped. Translated segments are kept.';
+    else { console.error(err); $('#tr-status').textContent = 'Failed: ' + err.message; toast('Translation failed — ' + err.message, 'err'); }
+  } finally {
+    S.translating = false;
+    $('#btn-translate').disabled = false;
+    $('#btn-translate-cancel').disabled = true;
+    updateTranslationExports();
+    renderTranslations();
+    paint();
+  }
+}
+
+/* ── auto-reframe ────────────────────────────────────────────────────── */
+async function autoFrame() {
+  if (!S.file || !video.videoWidth) { toast('Auto-frame needs a video track', 'err'); return; }
+  if (S.framing) { S.framing = false; return; }
+  S.framing = true;
+  const btn = $('#btn-autoframe');
+  btn.textContent = 'Stop';
+  pause();
+  try {
+    const { keyframes, confidence } = await analyzeReframe(video, {
+      onProgress: p => { progress(p); status(`Tracking the subject… ${Math.round(p * 100)}%`); },
+      shouldStop: () => !S.framing
+    });
+    renderer.focusKeys = keyframes;
+    renderer.focusMode = 'auto';
+    S.focusKeys = keyframes;
+    if ($('#sel-ratio').value === 'source') { $('#sel-ratio').value = '9:16'; renderer.ratio = '9:16'; sizeStage(); }
+    status(`Auto-frame ready — ${keyframes.length} keyframe${keyframes.length === 1 ? '' : 's'}, confidence ${Math.round(confidence * 100)}%. Move the Focus slider to go back to manual.`);
+    toast('Auto-frame applied', 'ok');
+    drawTimeline(); paint();
+  } catch (e) {
+    console.error(e);
+    toast('Auto-frame failed — ' + e.message, 'err');
+  } finally {
+    S.framing = false;
+    btn.textContent = 'Auto-frame';
+    progress(0);
+  }
+}
+
 /* ── stage rendering ─────────────────────────────────────────────────── */
 function sizeStage() {
   const { width, height } = renderer.dimensions(renderer.ratio, 720);
@@ -454,6 +627,14 @@ function paintTimeline() {
     tctx.fillStyle = '#b9b1ff';
     tctx.fillText('#' + c.index, x + 4, waveTop + 10);
   }
+  // auto-frame keyframes
+  if (renderer.focusMode === 'auto' && renderer.focusKeys) {
+    for (const k of renderer.focusKeys) {
+      const x = k.t / S.duration * w;
+      tctx.fillStyle = 'rgba(255,255,255,.55)';
+      tctx.fillRect(x - .5, h - 20, 1, 6);
+    }
+  }
   // search hits
   for (const hh of S.hits) {
     const x = hh.start / S.duration * w;
@@ -560,7 +741,9 @@ function doExport(kind) {
     txt: () => X.download(X.toTXT(S.segments), base + '.txt'),
     json: () => X.download(X.toJSON(projectJSON()), base + '.json', 'application/json'),
     md: () => X.download(X.toMarkdown({ name: S.name, ...projectJSON() }), base + '-summary.md', 'text/markdown'),
-    csv: () => X.download(X.toCSV(S.clips), base + '-clips.csv', 'text/csv')
+    csv: () => X.download(X.toCSV(S.clips), base + '-clips.csv', 'text/csv'),
+    'srt-tr': () => X.download(X.toSRT(S.segments, 0, X.translated(S.trLang)), `${base}.${S.trLang}.srt`, 'application/x-subrip'),
+    'srt-bi': () => X.download(X.toSRT(S.segments, 0, X.bilingual(S.trLang)), `${base}.${S.trLang}-bilingual.srt`, 'application/x-subrip')
   };
   map[kind]?.();
   toast('Exported ' + kind.toUpperCase(), 'ok');
@@ -570,6 +753,7 @@ function doExport(kind) {
 function bindCaptions() {
   const st = renderer.style = defaultCaptionStyle();
   const sync = () => {
+    renderer.captionMode = $('#cap-mode').value;
     st.template = $('#cap-template').value;
     st.position = $('#cap-pos').value;
     st.size = +$('#cap-size').value;
@@ -582,7 +766,7 @@ function bindCaptions() {
     $('#cap-wpl-v').textContent = st.wordsPerLine;
     paint();
   };
-  ['#cap-template', '#cap-pos', '#cap-size', '#cap-wpl', '#cap-color', '#cap-upper', '#cap-karaoke', '#cap-shadow']
+  ['#cap-mode', '#cap-template', '#cap-pos', '#cap-size', '#cap-wpl', '#cap-color', '#cap-upper', '#cap-karaoke', '#cap-shadow']
     .forEach(sel => $(sel).addEventListener('input', sync));
   sync();
 }
@@ -632,7 +816,16 @@ function bind() {
   $('#sel-speed').value = '1';
   $('#sel-speed').onchange = e => { video.playbackRate = parseFloat(e.target.value) || 1; };
   $('#sel-ratio').onchange = e => { renderer.ratio = e.target.value; sizeStage(); paint(); };
-  $('#rng-focus').oninput = e => { renderer.focus = e.target.value / 100; paint(); };
+  $('#rng-focus').oninput = e => {
+    renderer.focus = e.target.value / 100;
+    renderer.focusMode = 'manual';
+    paint();
+  };
+  $('#btn-autoframe').onclick = autoFrame;
+  $('#btn-use-subs').onclick = useEmbeddedSubtitles;
+  $('#btn-ignore-subs').onclick = () => { $('#sub-found').hidden = true; };
+  $('#btn-translate').onclick = translateAll;
+  $('#btn-translate-cancel').onclick = () => { translator.cancel(); };
   $('#chk-captions').onchange = e => { renderer.showCaptions = e.target.checked; paint(); };
   $('#chk-loop').onchange = e => { S.loopClip = e.target.checked; };
   video.addEventListener('play', () => { $('#btn-play').textContent = '❚❚'; });
@@ -722,9 +915,12 @@ function bind() {
 
 /* ── boot ────────────────────────────────────────────────────────────── */
 bind();
+fillLanguages();
 bindCaptions();
+renderTranslations();
+updateTranslationExports();
 sizeStage();
 drawTimeline();
 requestAnimationFrame(frame);
 status('Idle — load a file to begin, or open the demo project.');
-window.WayinStudio = { S, renderer, doSearch, loadDemo };
+window.WayinStudio = { S, renderer, translator, transcriber, doSearch, loadDemo, translateAll, autoFrame };

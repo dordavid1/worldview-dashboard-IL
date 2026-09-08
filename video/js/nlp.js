@@ -312,3 +312,57 @@ export function highlight(text, query) {
 }
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const escapeHTML = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ── language detection ──────────────────────────────────────────────── */
+const SCRIPTS = [
+  ['he', /[\u0590-\u05FF]/g], ['am', /[\u1200-\u137F]/g], ['el', /[\u0370-\u03FF]/g],
+  ['hi', /[\u0900-\u097F]/g], ['bn', /[\u0980-\u09FF]/g], ['th', /[\u0E00-\u0E7F]/g],
+  ['ko', /[\uAC00-\uD7AF]/g],  ['ja', /[\u3040-\u30FF]/g], ['zh', /[\u4E00-\u9FFF]/g]
+];
+const LATIN_HINTS = {
+  en: 'the and that with have this from they will your what about which would there',
+  es: 'que de los las por para con una como pero más este cuando muy porque',
+  fr: 'que les des dans pour avec sur pas plus vous nous être cette mais tout',
+  de: 'der die das und ist nicht ein eine auch mit für auf sich wir dass',
+  pt: 'que não uma para com dos como mais mas quando muito isso porque você',
+  it: 'che non una per con del sono come più anche quando questo perché sempre',
+  nl: 'het een van dat niet voor met zijn maar deze ook nog naar worden',
+  pl: 'nie jest się tego które przez jako oraz tylko można bardzo jeszcze',
+  ro: 'este care pentru din nu mai sunt când foarte dacă acest despre',
+  tr: 'bir bu için ile daha çok ama gibi olarak sonra kadar değil',
+  id: 'yang dan untuk dengan tidak dari ini itu pada adalah akan bisa',
+  sv: 'och att det som för med inte den har vi kan men'
+};
+const ARABIC_VARIANTS = [['fa', /[\u067E\u0686\u0698\u06AF\u06CC]/g], ['ur', /[\u0679\u0688\u0691\u06BA\u06BE\u06D2]/g]];
+const CYRILLIC_VARIANTS = [['uk', /[іїєґІЇЄҐ]/g]];
+
+/** Best-effort source-language guess: script first, then Latin stopword frequency. */
+export function detectLanguage(text = '') {
+  const sample = text.slice(0, 4000);
+  if (!sample.trim()) return { code: 'en', confidence: 0 };
+  const letters = (sample.match(/\p{L}/gu) || []).length || 1;
+
+  const arabic = (sample.match(/[\u0600-\u06FF]/g) || []).length;
+  if (arabic / letters > .25) {
+    for (const [code, re] of ARABIC_VARIANTS) if ((sample.match(re) || []).length > 2) return { code, confidence: .8 };
+    return { code: 'ar', confidence: arabic / letters };
+  }
+  const cyr = (sample.match(/[\u0400-\u04FF]/g) || []).length;
+  if (cyr / letters > .25) {
+    for (const [code, re] of CYRILLIC_VARIANTS) if ((sample.match(re) || []).length > 2) return { code, confidence: .8 };
+    return { code: 'ru', confidence: cyr / letters };
+  }
+  for (const [code, re] of SCRIPTS) {
+    const n = (sample.match(re) || []).length;
+    if (n / letters > .2) return { code, confidence: n / letters };
+  }
+  const toks = tokenize(sample);
+  if (!toks.length) return { code: 'en', confidence: 0 };
+  const counts = new Set(toks);
+  let best = ['en', 0];
+  for (const [code, words] of Object.entries(LATIN_HINTS)) {
+    const hits = words.split(' ').filter(w => counts.has(w)).length;
+    if (hits > best[1]) best = [code, hits];
+  }
+  return { code: best[0], confidence: Math.min(best[1] / 8, 1) };
+}

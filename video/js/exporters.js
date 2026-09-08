@@ -9,14 +9,24 @@ export function stamp(t, sep = ',') {
 }
 
 const shift = (segs, offset = 0) => segs.map(s => ({ ...s, start: s.start - offset, end: s.end - offset }));
+const plain = s => s.text;
 
-export function toSRT(segments, offset = 0) {
+/** Text pickers for subtitle exports. */
+export const original = plain;
+export const translated = lang => s => (s.tr && s.tr[lang]) || s.text;
+export const bilingual = (lang, translationFirst = true) => s => {
+  const t = s.tr && s.tr[lang];
+  if (!t) return s.text;
+  return translationFirst ? `${t}\n${s.text}` : `${s.text}\n${t}`;
+};
+
+export function toSRT(segments, offset = 0, textOf = plain) {
   return shift(segments, offset).filter(s => s.end > 0).map((s, i) =>
-    `${i + 1}\n${stamp(s.start)} --> ${stamp(s.end)}\n${s.text.trim()}\n`).join('\n');
+    `${i + 1}\n${stamp(s.start)} --> ${stamp(s.end)}\n${String(textOf(s)).trim()}\n`).join('\n');
 }
-export function toVTT(segments, offset = 0) {
+export function toVTT(segments, offset = 0, textOf = plain) {
   return 'WEBVTT\n\n' + shift(segments, offset).filter(s => s.end > 0).map((s, i) =>
-    `${i + 1}\n${stamp(s.start, '.')} --> ${stamp(s.end, '.')}\n${s.text.trim()}\n`).join('\n');
+    `${i + 1}\n${stamp(s.start, '.')} --> ${stamp(s.end, '.')}\n${String(textOf(s)).trim()}\n`).join('\n');
 }
 export function toTXT(segments) {
   return segments.map(s => `[${stamp(s.start).slice(0, 8)}] ${s.text.trim()}`).join('\n');

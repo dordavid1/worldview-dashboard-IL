@@ -44,6 +44,13 @@
         <button class="btn small" id="btn-pick">Choose file</button>
         <input type="file" id="file-input" accept="video/*,audio/*" hidden>
       </div>
+      <div class="found" id="sub-found" hidden>
+        <b id="sub-found-txt">Subtitle track found</b>
+        <div class="found-actions">
+          <button class="btn small" id="btn-use-subs">Use as transcript</button>
+          <button class="btn ghost small" id="btn-ignore-subs">Ignore</button>
+        </div>
+      </div>
       <div class="meta-grid" id="media-meta" hidden>
         <div><span>Duration</span><b id="m-dur">—</b></div>
         <div><span>Resolution</span><b id="m-res">—</b></div>
@@ -135,6 +142,7 @@
         </select>
       </label>
       <label class="mini">Focus <input type="range" id="rng-focus" min="0" max="100" value="50" title="Reframe focus point"></label>
+      <button class="btn small" id="btn-autoframe" title="Track the subject and keyframe the crop">Auto-frame</button>
       <label class="mini">Speed
         <select id="sel-speed"><option>0.5</option><option>1</option><option>1.25</option><option>1.5</option><option>2</option></select>
       </label>
@@ -160,6 +168,7 @@
       <button class="tab" data-tab="search">Moments</button>
       <button class="tab" data-tab="clips">Clips</button>
       <button class="tab" data-tab="summary">Summary</button>
+      <button class="tab" data-tab="translate">Translate</button>
       <button class="tab" data-tab="captions">Captions</button>
       <button class="tab" data-tab="export">Export</button>
     </nav>
@@ -209,6 +218,33 @@
       </div>
     </div>
 
+    <div class="tabpane" data-pane="translate">
+      <div class="scroll pad" id="translate-pane">
+        <div class="row2">
+          <label class="field"><span>From</span>
+            <select id="tr-src"><option value="auto" selected>Auto detect</option></select>
+          </label>
+          <label class="field"><span>To</span>
+            <select id="tr-tgt"></select>
+          </label>
+        </div>
+        <label class="field"><span>Engine</span>
+          <select id="tr-model">
+            <option value="nllb" selected>NLLB-200 distilled 600M — 200 languages</option>
+            <option value="m2m">M2M100 418M — smaller download</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="tr-live" checked><span>Live: translate around the playhead first</span></label>
+        <div class="btn-grid">
+          <button class="btn primary" id="btn-translate">Translate transcript</button>
+          <button class="btn ghost" id="btn-translate-cancel" disabled>Stop</button>
+        </div>
+        <div class="progress"><div id="tr-bar"></div></div>
+        <p class="hint" id="tr-status">Speech is transcribed in its own language first, then translated here — so Hebrew audio can become English, Spanish or Arabic subtitles. Runs on-device; the engine downloads once.</p>
+      </div>
+      <div class="scroll" id="tr-list"></div>
+    </div>
+
     <div class="tabpane" data-pane="captions">
       <div class="scroll pad">
         <label class="field"><span>Template</span>
@@ -218,6 +254,13 @@
             <option value="neon">Neon</option>
             <option value="bar">Subtitle Bar</option>
             <option value="ticker">Ticker</option>
+          </select>
+        </label>
+        <label class="field"><span>Caption text</span>
+          <select id="cap-mode">
+            <option value="original" selected>Original language</option>
+            <option value="translated">Translation</option>
+            <option value="both">Bilingual — translation + original</option>
           </select>
         </label>
         <label class="field"><span>Position</span>
@@ -249,6 +292,8 @@
           <button class="btn small" data-export="json">Project .json</button>
           <button class="btn small" data-export="md">Summary .md</button>
           <button class="btn small" data-export="csv">Clips .csv</button>
+          <button class="btn small" data-export="srt-tr" disabled>Translated .srt</button>
+          <button class="btn small" data-export="srt-bi" disabled>Bilingual .srt</button>
         </div>
 
         <h4>Render clip</h4>
